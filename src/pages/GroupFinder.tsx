@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Group, QualityScore } from '../types';
 import { groupStorage } from '../lib/storage';
-import { buildFbGroupSearchUrl, openInNewTab, isFbGroupUrl, parseFbGroupsFromHtml, parseFbGroupsFromText } from '../lib/facebook';
+import { buildFbGroupSearchUrl, openInNewTab, isFbGroupUrl, parseFbGroupsFromHtml, parseFbGroupsFromText, guessCategoryByName, guessMemberCount } from '../lib/facebook';
 import { useNotifications } from '../components/NotificationCenter';
 import { isoNow } from '../lib/date';
 
@@ -95,7 +95,7 @@ export function GroupFinder() {
     const html = e.clipboardData.getData('text/html');
     const text = e.clipboardData.getData('text/plain');
 
-    let parsed: Array<{ name: string; url: string }> = [];
+    let parsed: Array<{ name: string; url: string; memberCount?: string }> = [];
     if (html) {
       parsed = parseFbGroupsFromHtml(html);
     }
@@ -115,8 +115,8 @@ export function GroupFinder() {
         id: `imp_${Date.now()}_${idx}_${Math.random().toString(36).substr(2, 4)}`,
         name: p.name,
         url: p.url,
-        category: '',
-        memberCountNote: '',
+        category: guessCategoryByName(p.name),
+        memberCountNote: p.memberCount || guessMemberCount(p.name),
         isDuplicate: isDup,
       };
     });
@@ -148,8 +148,8 @@ export function GroupFinder() {
         id: `imp_${Date.now()}_${idx}_${Math.random().toString(36).substr(2, 4)}`,
         name: p.name,
         url: p.url,
-        category: '',
-        memberCountNote: '',
+        category: guessCategoryByName(p.name),
+        memberCountNote: p.memberCount || guessMemberCount(p.name),
         isDuplicate: isDup,
       };
     });
@@ -161,7 +161,7 @@ export function GroupFinder() {
   }
 
   // Bookmarklet Javascript string
-  const bookmarkletCode = `javascript:(function(){const links=Array.from(document.querySelectorAll('a[href*="/groups/"]'));const groups=[];const seen=new Set();links.forEach(a=>{const href=a.href;const match=href.match(/facebook\\.com\\/groups\\/([^\\/?#]+)/);if(match){const groupId=match[1];if(['feed','search','discover','joins','create','categories'].includes(groupId.toLowerCase()))return;const url='https://www.facebook.com/groups/'+groupId+'/';if(!seen.has(url)){seen.add(url);let name=a.innerText.trim();if(!name&&a.querySelector('span')){name=a.querySelector('span').innerText.trim();}if(name){name=name.split('\\n')[0].trim();}if(name&&name!=='Groups'&&name.length>2){groups.push({name,url});}}}});if(groups.length===0){alert('ไม่พบกลุ่มในหน้านี้ กรุณาใช้ในหน้า https://www.facebook.com/groups/');return;}const json=JSON.stringify(groups,null,2);const el=document.createElement('textarea');el.value=json;document.body.appendChild(el);el.select();document.execCommand('copy');document.body.removeChild(el);alert('ดึงข้อมูลสำเร็จ! พบ '+groups.length+' กลุ่ม และคัดลอกข้อมูลลง Clipboard แล้ว\\n\\nกรุณากลับไปที่เว็บ PepsGroup Share Command และกดวางในช่องนำเข้ากลุ่ม');})();`;
+  const bookmarkletCode = `javascript:(function(){const buttons=Array.from(document.querySelectorAll('span,div,role[button]')).filter(el=>{const txt=el.innerText||'';return txt==='See more'||txt==='ดูเพิ่มเติม'||txt==='แสดงเพิ่มเติม'||txt==='See More';});buttons.forEach(btn=>btn.click());const links=Array.from(document.querySelectorAll('a[href*="/groups/"]'));const groups=[];const seen=new Set();links.forEach(a=>{const href=a.href;const match=href.match(/facebook\\.com\\/groups\\/([^\\/?#]+)/);if(match){const groupId=match[1];if(['feed','search','discover','joins','create','categories'].includes(groupId.toLowerCase()))return;const url='https://www.facebook.com/groups/'+groupId+'/';if(!seen.has(url)){seen.add(url);let name=a.innerText.trim();if(!name&&a.querySelector('span')){name=a.querySelector('span').innerText.trim();}if(name){name=name.split('\\n')[0].trim();}if(name&&name!=='Groups'&&name.length>2){let memberCount='';let parent=a.parentElement;for(let i=0;i<5&&parent;i++){const text=parent.innerText||'';const mMatch=text.match(/(?:สมาชิก|members?)\\s*([0-9\\.,kKหมื่นแสนล้าน\\s]+)/i);if(mMatch){memberCount=mMatch[0].split('\\n')[0].trim();break;}parent=parent.parentElement;}groups.push({name,url,memberCount});}}}});if(groups.length===0){alert('ไม่พบกลุ่มในหน้านี้ กรุณาเลื่อนเมนูด้านซ้ายลงมาล่างสุด และตรวจดูว่าอยู่ในหน้า https://www.facebook.com/groups/');return;}const json=JSON.stringify(groups,null,2);const el=document.createElement('textarea');el.value=json;document.body.appendChild(el);el.select();document.execCommand('copy');document.body.removeChild(el);alert('ดึงข้อมูลสำเร็จ! พบ '+groups.length+' กลุ่ม และคัดลอกข้อมูลลง Clipboard แล้ว\\n\\nกรุณากลับไปที่เว็บ PepsGroup Share Command และกดวางในช่องนำเข้ากลุ่ม');})();`;
 
   function copyBookmarklet() {
     navigator.clipboard.writeText(bookmarkletCode).then(() => {
@@ -543,7 +543,7 @@ export function GroupFinder() {
                 </button>
               </div>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                *เมื่อติดตั้งแล้ว: ไปหน้า Facebook Groups กดปุ่มบุ๊กมาร์กนี้ แล้วกลับมาวางในกล่องด้านล่างได้เลย
+                *<strong>ข้อแนะนำ:</strong> หากคุณมีกลุ่มจำนวนมาก ให้<strong>เลื่อนสกอลบาร์ด้านซ้ายมือบน Facebook ลงมาจนสุด</strong>เพื่อให้เบราว์เซอร์โหลดรายชื่อกลุ่มแสดงผลทั้งหมดก่อนรัน Bookmarklet นี้ครับ
               </p>
             </div>
           </div>
