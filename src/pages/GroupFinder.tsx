@@ -161,7 +161,7 @@ export function GroupFinder() {
   }
 
   // Bookmarklet Javascript string
-  const bookmarkletCode = `javascript:(function(){const links=Array.from(document.querySelectorAll('a[href*="/groups/"]'));const groups=[];const seen=new Set();links.forEach(a=>{const href=a.href;const match=href.match(/facebook\\.com\\/groups\\/([^\\/?#]+)/);if(match){const groupId=match[1];if(['feed','search','discover','joins','create','categories'].includes(groupId.toLowerCase()))return;const url='https://www.facebook.com/groups/'+groupId+'/';if(!seen.has(url)){seen.add(url);let name=a.innerText.trim();if(!name&&a.querySelector('span')){name=a.querySelector('span').innerText.trim();}if(name){name=name.split('\\n')[0].trim();}if(name&&name!=='Groups'&&name.length>2){groups.push({name,url});}}}});if(groups.length===0){alert('ไม่พบกลุ่มในหน้านี้ กรุณาใช้ในหน้า https://www.facebook.com/groups/mine');return;}const json=JSON.stringify(groups,null,2);const el=document.createElement('textarea');el.value=json;document.body.appendChild(el);el.select();document.execCommand('copy');document.body.removeChild(el);alert('ดึงข้อมูลสำเร็จ! พบ '+groups.length+' กลุ่ม และคัดลอกข้อมูลลง Clipboard แล้ว\\n\\nกรุณากลับไปที่เว็บ PepsGroup Share Command และกดวางในช่องนำเข้ากลุ่ม');})();`;
+  const bookmarkletCode = `javascript:(function(){const links=Array.from(document.querySelectorAll('a[href*="/groups/"]'));const groups=[];const seen=new Set();links.forEach(a=>{const href=a.href;const match=href.match(/facebook\\.com\\/groups\\/([^\\/?#]+)/);if(match){const groupId=match[1];if(['feed','search','discover','joins','create','categories'].includes(groupId.toLowerCase()))return;const url='https://www.facebook.com/groups/'+groupId+'/';if(!seen.has(url)){seen.add(url);let name=a.innerText.trim();if(!name&&a.querySelector('span')){name=a.querySelector('span').innerText.trim();}if(name){name=name.split('\\n')[0].trim();}if(name&&name!=='Groups'&&name.length>2){groups.push({name,url});}}}});if(groups.length===0){alert('ไม่พบกลุ่มในหน้านี้ กรุณาใช้ในหน้า https://www.facebook.com/groups/');return;}const json=JSON.stringify(groups,null,2);const el=document.createElement('textarea');el.value=json;document.body.appendChild(el);el.select();document.execCommand('copy');document.body.removeChild(el);alert('ดึงข้อมูลสำเร็จ! พบ '+groups.length+' กลุ่ม และคัดลอกข้อมูลลง Clipboard แล้ว\\n\\nกรุณากลับไปที่เว็บ PepsGroup Share Command และกดวางในช่องนำเข้ากลุ่ม');})();`;
 
   function copyBookmarklet() {
     navigator.clipboard.writeText(bookmarkletCode).then(() => {
@@ -511,7 +511,7 @@ export function GroupFinder() {
                 วิธีที่ 1: คัดลอกและวางแบบเร็ว (Easy HTML Copy-Paste)
               </h3>
               <ol style={{ fontSize: '0.825rem', color: 'var(--text-secondary)', paddingLeft: '1.2rem', lineHeight: '1.5' }}>
-                <li>เปิดแท็บใหม่ไปที่หน้า <a href="https://www.facebook.com/groups/mine" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-light)', textDecoration: 'underline' }}>Facebook Groups (กลุ่มของคุณ)</a></li>
+                <li>เปิดแท็บใหม่ไปที่หน้า <a href="https://www.facebook.com/groups/" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-light)', textDecoration: 'underline' }}>Facebook Groups (กลุ่มทั้งหมด)</a></li>
                 <li>กด <strong>Ctrl + A</strong> (เลือกทั้งหมดบนหน้าเว็บ)</li>
                 <li>กด <strong>Ctrl + C</strong> (คัดลอกทั้งหมด)</li>
                 <li>กลับมาที่หน้านี้ คลิกในกล่องข้อความด้านล่างแล้วกด <strong>Ctrl + V</strong> (วาง) เพื่อดึงข้อมูลอัตโนมัติ</li>
