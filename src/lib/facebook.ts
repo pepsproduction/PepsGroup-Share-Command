@@ -52,11 +52,12 @@ export function normalizeFbGroupUrl(url: string): string {
 }
 
 /**
- * Open a URL in a new browser tab (manual navigation only).
+ * Open a URL in a browser tab (manual navigation only).
+ * Reuses the same tab by using a target name ('fb_share_tab') by default.
  */
-export function openInNewTab(url: string): void {
+export function openInNewTab(url: string, targetName: string = 'fb_share_tab'): void {
   const normalized = isFbGroupUrl(url) ? normalizeFbGroupUrl(url) : url;
-  window.open(normalized, '_blank');
+  window.open(normalized, targetName);
 }
 
 /**

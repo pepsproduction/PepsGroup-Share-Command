@@ -101,7 +101,22 @@ export function ShareSession() {
   function copyCaption() {
     if (!currentPost) return;
     const text = `${currentPost.title}\n\n${currentPost.caption}\n\n${currentPost.link}\n\n${currentPost.hashtags}`;
-    navigator.clipboard.writeText(text).then(() => addNotification('success', 'คัดลอก Caption แล้ว', ''));
+    navigator.clipboard.writeText(text).then(() => addNotification('success', 'คัดลอก Caption สำเร็จ!', ''));
+  }
+
+  function handleOpenAndCopy() {
+    if (!currentPost || !currentGroup) return;
+    const text = `${currentPost.title}\n\n${currentPost.caption}\n\n${currentPost.link}\n\n${currentPost.hashtags}`;
+    navigator.clipboard.writeText(text)
+      .then(() => {
+        addNotification('success', 'คัดลอก Caption สำเร็จ!', 'เปิดกลุ่มในแท็บหลักแล้ว กด Ctrl+V เพื่อวางและโพสต์');
+        openInNewTab(currentGroup.url, 'fb_share_tab');
+      })
+      .catch((err) => {
+        console.error('Failed to copy caption:', err);
+        addNotification('error', 'คัดลอก Caption ไม่สำเร็จ', 'กรุณากดปุ่มคัดลอก Caption ด้านข้าง');
+        openInNewTab(currentGroup.url, 'fb_share_tab');
+      });
   }
 
   function handleExportCsv() {
@@ -218,9 +233,23 @@ export function ShareSession() {
           <div className="session-caption-box mb-2">
             {currentPost.title}{'\n\n'}{currentPost.caption}{'\n\n'}{currentPost.link}{'\n\n'}{currentPost.hashtags}
           </div>
-          <div className="flex gap-1 mb-2" style={{ flexWrap: 'wrap' }}>
-            <button className="btn btn-secondary" onClick={copyCaption}>📋 Copy Caption</button>
-            <button className="btn btn-primary" onClick={() => openInNewTab(currentGroup.url)} aria-label="เปิดกลุ่ม Facebook">🔗 Open Group</button>
+          <div className="flex gap-1 mb-2" style={{ flexWrap: 'wrap', width: '100%' }}>
+            <button 
+              className="btn btn-primary" 
+              style={{ flex: '2 1 200px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '0.75rem 1rem', fontSize: '1rem', fontWeight: 'bold' }} 
+              onClick={handleOpenAndCopy} 
+              aria-label="เปิดกลุ่มและคัดลอกแคปชั่น"
+            >
+              🚀 เปิดกลุ่ม & คัดลอกแคปชั่น (ใช้แท็บเดิม)
+            </button>
+            <button 
+              className="btn btn-secondary" 
+              style={{ flex: '1 1 120px' }} 
+              onClick={copyCaption}
+              aria-label="คัดลอกแคปชั่น"
+            >
+              📋 คัดลอกแคปชั่น
+            </button>
           </div>
 
           {/* Note */}
