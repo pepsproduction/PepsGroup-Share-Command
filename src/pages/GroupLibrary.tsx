@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import type { Group, QualityScore } from '../types';
 import { groupStorage } from '../lib/storage';
-import { openInNewTab } from '../lib/facebook';
+import { openInNewTab, isFbGroupUrl, normalizeFbGroupUrl } from '../lib/facebook';
 import { useNotifications } from '../components/NotificationCenter';
 import { GroupStatusBadge, QualityBadge, LinkBadge } from '../components/Badge';
 import { ConfirmModal, Modal } from '../components/Modal';
@@ -53,8 +53,10 @@ export function GroupLibrary() {
 
   function handleSaveEdit() {
     if (!editGroup) return;
+    const cleanUrl = isFbGroupUrl(editGroup.url) ? normalizeFbGroupUrl(editGroup.url) : editGroup.url;
     const updated: Group = {
       ...editGroup,
+      url: cleanUrl,
       keywords: editKeywords.split(',').map((k) => k.trim()).filter(Boolean),
       updatedAt: isoNow(),
     };

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Group, QualityScore } from '../types';
 import { groupStorage } from '../lib/storage';
-import { buildFbGroupSearchUrl, openInNewTab, isFbGroupUrl, parseFbGroupsFromHtml, parseFbGroupsFromText, guessCategoryByName, guessMemberCount } from '../lib/facebook';
+import { buildFbGroupSearchUrl, openInNewTab, isFbGroupUrl, parseFbGroupsFromHtml, parseFbGroupsFromText, guessCategoryByName, guessMemberCount, normalizeFbGroupUrl } from '../lib/facebook';
 import { useNotifications } from '../components/NotificationCenter';
 import { isoNow } from '../lib/date';
 
@@ -65,8 +65,10 @@ export function GroupFinder() {
   function handleSave() {
     if (!validate()) return;
 
+    const normalizedUrl = normalizeFbGroupUrl(form.url);
+
     // Check duplicate
-    const existing = groupStorage.findByUrl(form.url);
+    const existing = groupStorage.findByUrl(normalizedUrl);
     if (existing) {
       addNotification('warning', 'พบข้อมูลซ้ำ', `กลุ่ม "${existing.name}" มี URL นี้อยู่แล้ว`);
       return;
@@ -75,6 +77,7 @@ export function GroupFinder() {
     const now = isoNow();
     const group: Group = {
       ...form,
+      url: normalizedUrl,
       id: `grp_${Date.now()}`,
       keywords: keywordsText.split(',').map((k) => k.trim()).filter(Boolean),
       createdAt: now,
@@ -222,14 +225,16 @@ export function GroupFinder() {
     let importedCount = 0;
     
     selected.forEach((item) => {
+      const normalizedUrl = normalizeFbGroupUrl(item.url);
+      
       // Final duplication safeguard
-      const existing = groupStorage.findByUrl(item.url);
+      const existing = groupStorage.findByUrl(normalizedUrl);
       if (existing) return;
 
       const group: Group = {
         id: `grp_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
         name: item.name.trim(),
-        url: item.url,
+        url: normalizedUrl,
         category: item.category,
         keywords: [],
         memberCountNote: item.memberCountNote.trim(),

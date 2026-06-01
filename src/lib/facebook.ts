@@ -12,10 +12,51 @@ export function buildFbGroupSearchUrl(keyword: string): string {
 }
 
 /**
+ * Normalize a Facebook group URL to ensure it is in desktop format (www.facebook.com),
+ * uses HTTPS, and has a trailing slash.
+ */
+export function normalizeFbGroupUrl(url: string): string {
+  let cleaned = url.trim();
+  
+  // Replace mobile subdomains (m.facebook.com, mobile.facebook.com, touch.facebook.com)
+  cleaned = cleaned.replace(/https?:\/\/(?:m|mobile|touch|web)\.facebook\.com/i, 'https://www.facebook.com');
+  
+  // Ensure protocol
+  if (!cleaned.startsWith('http://') && !cleaned.startsWith('https://')) {
+    cleaned = 'https://' + cleaned;
+  }
+  
+  // Ensure www.
+  if (cleaned.startsWith('https://facebook.com')) {
+    cleaned = cleaned.replace('https://facebook.com', 'https://www.facebook.com');
+  } else if (cleaned.startsWith('http://facebook.com')) {
+    cleaned = cleaned.replace('http://facebook.com', 'https://www.facebook.com');
+  }
+  
+  // Remove query parameters
+  const qIdx = cleaned.indexOf('?');
+  if (qIdx !== -1) {
+    cleaned = cleaned.substring(0, qIdx);
+  }
+  const hIdx = cleaned.indexOf('#');
+  if (hIdx !== -1) {
+    cleaned = cleaned.substring(0, hIdx);
+  }
+  
+  // Ensure trailing slash
+  if (!cleaned.endsWith('/')) {
+    cleaned = cleaned + '/';
+  }
+  
+  return cleaned;
+}
+
+/**
  * Open a URL in a new browser tab (manual navigation only).
  */
 export function openInNewTab(url: string): void {
-  window.open(url, '_blank', 'noopener,noreferrer');
+  const normalized = isFbGroupUrl(url) ? normalizeFbGroupUrl(url) : url;
+  window.open(normalized, '_blank');
 }
 
 /**
