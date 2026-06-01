@@ -1,0 +1,87 @@
+/* =====================================================
+   THEME VARIABLES — PepsGroup Share Command
+   Dark Orange (default), Dark Gold, High Contrast
+   ===================================================== */
+
+:root,
+[data-theme="dark_orange"] {
+  /* Background */
+  --bg-base:     #0a0a0f;
+  --bg-surface:  #111118;
+  --bg-card:     #16161f;
+  --bg-hover:    #1e1e2a;
+  --bg-input:    #1a1a25;
+
+  /* Primary accent — Orange */
+  --accent:      #ff6b00;
+  --accent-glow: rgba(255, 107, 0, 0.25);
+  --accent-dim:  rgba(255, 107, 0, 0.15);
+  --accent-text: #ff8c33;
+  --accent-light:#ffaa66;
+
+  /* Secondary accent — Gold */
+  --gold:        #f0a500;
+  --gold-glow:   rgba(240, 165, 0, 0.2);
+  --gold-dim:    rgba(240, 165, 0, 0.12);
+  --gold-text:   #ffc233;
+
+  /* Text */
+  --text-primary:   #f0f0f5;
+  --text-secondary: #b0b0c0;
+  --text-muted:     #70708a;
+  --text-inverse:   #0a0a0f;
+
+  /* Status colors */
+  --status-ready:   #22c55e;
+  --status-pending: #f0a500;
+  --status-rules:   #eab308;
+  --status-blocked: #ef4444;
+  --status-skipped: #6b7280;
+  --status-done:    #3b82f6;
+
+  /* Border */
+  --border:        rgba(255, 107, 0, 0.2);
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-focus:  var(--accent);
+
+  /* Sidebar */
+  --sidebar-bg: #0d0d14;
+  --sidebar-w:  260px;
+  --header-h:   64px;
+}
+
+[data-theme="dark_gold"] {
+  --accent:      #f0a500;
+  --accent-glow: rgba(240, 165, 0, 0.25);
+  --accent-dim:  rgba(240, 165, 0, 0.15);
+  --accent-text: #ffc233;
+  --accent-light:#ffd980;
+
+  --gold:        #ff6b00;
+  --gold-glow:   rgba(255, 107, 0, 0.2);
+  --gold-dim:    rgba(255, 107, 0, 0.12);
+  --gold-text:   #ff8c33;
+
+  --border:        rgba(240, 165, 0, 0.25);
+}
+
+[data-theme="high_contrast"] {
+  --bg-base:     #000000;
+  --bg-surface:  #0a0a0a;
+  --bg-card:     #111111;
+  --bg-hover:    #1a1a1a;
+  --bg-input:    #0f0f0f;
+
+  --accent:      #ff7700;
+  --accent-glow: rgba(255, 119, 0, 0.35);
+  --accent-dim:  rgba(255, 119, 0, 0.2);
+  --accent-text: #ff9933;
+  --accent-light:#ffbb66;
+
+  --text-primary:   #ffffff;
+  --text-secondary: #cccccc;
+  --text-muted:     #888888;
+
+  --border:        rgba(255, 119, 0, 0.4);
+  --border-subtle: rgba(255, 255, 255, 0.1);
+}
