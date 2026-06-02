@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type { Lead, ShareQueueItem, ShareItemStatus } from '../types';
 import { queueStorage, campaignStorage, groupStorage, postStorage, leadStorage } from '../lib/storage';
 import { useNotifications } from '../components/NotificationContexts';
@@ -10,6 +10,14 @@ import { isoNow } from '../lib/date';
 import { exportQueueCsv, downloadFile, downloadJson } from '../lib/exporters';
 import { buildGroupAwareCaption } from '../lib/automation';
 import { createId } from '../lib/ids';
+import {
+  isExtensionInstalled,
+  pingExtension,
+  startExtensionSession,
+  cancelExtensionSession,
+  subscribeToExtensionEvents,
+  type ExtensionShareResult,
+} from '../lib/extension';
 
 const DEFAULT_LEAD_FORM = {
   customerName: '',
@@ -57,6 +65,102 @@ export function ShareSession() {
   const [noteText, setNoteText] = useState('');
   const [showLeadForm, setShowLeadForm] = useState(false);
   const [leadForm, setLeadForm] = useState({ ...DEFAULT_LEAD_FORM });
+
+  // --- Auto Share Extension State ---
+  const [extInstalled, setExtInstalled] = useState(false);
+  const [autoPostUrl, setAutoPostUrl] = useState('');
+  const [autoRunning, setAutoRunning] = useState(false);
+  const [autoResults, setAutoResults] = useState<ExtensionShareResult[]>([]);
+  const [autoProgress, setAutoProgress] = useState<{ current: number; total: number; group: string } | null>(null);
+
+  // Detect extension on mount
+  useEffect(() => {
+    if (isExtensionInstalled()) {
+      pingExtension().then(ok => setExtInstalled(ok));
+    }
+  }, []);
+
+  // Subscribe to extension events
+  useEffect(() => {
+    if (!extInstalled) return;
+    const unsub = subscribeToExtensionEvents({
+      onProgress: (data) => {
+        setAutoProgress({ current: data.currentIndex + 1, total: data.total, group: data.group });
+      },
+      onResult: (result) => {
+        setAutoResults(prev => [...prev, result]);
+        const allGroups = groupStorage.getAll();
+        const matchedItem = queueStorage.getAll().find(
+          (q) => q.campaignId === selectedCampaign && allGroups.find(g => g.id === q.groupId)?.name === result.group
+        );
+        if (matchedItem) {
+          const st: ShareItemStatus = result.status === 'posted' ? 'posted'
+            : result.status === 'pending_admin' ? 'pending_admin'
+            : result.status === 'failed' ? 'failed'
+            : 'skipped';
+          queueStorage.update({ ...matchedItem, status: st, updatedAt: isoNow(), submittedAt: isoNow() });
+        }
+      },
+      onDone: (data) => {
+        setAutoRunning(false);
+        setAutoProgress(null);
+        setAutoResults(data.results);
+        addNotification('success', 'Auto Share เสร็จสิ้น!', `แชร์ครบ ${data.results.length} กลุ่มแล้ว`);
+      },
+      onCancelled: () => {
+        setAutoRunning(false);
+        setAutoProgress(null);
+        addNotification('warning', 'ยกเลิก Auto Share', 'Session ถูกยกเลิก');
+      },
+    });
+    return unsub;
+  }, [extInstalled, selectedCampaign]);
+
+  const handleStartAutoShare = useCallback(async () => {
+    if (!selectedCampaign || !autoPostUrl.trim()) {
+      addNotification('warning', 'กรุณากรอกข้อมูลให้ครบ', 'เลือกแคมเปญและกรอก URL โพสต์');
+      return;
+    }
+    const pendingItems = queueStorage.getByCampaign(selectedCampaign).filter(q => q.status === 'not_started');
+    if (pendingItems.length === 0) {
+      addNotification('warning', 'ไม่มีคิวที่ยังไม่เริ่ม', 'แคมเปญนี้ไม่มีรายการที่ยังไม่เริ่มแชร์');
+      return;
+    }
+    const allGroups = groupStorage.getAll();
+    const extGroups = pendingItems
+      .map(item => allGroups.find(g => g.id === item.groupId))
+      .filter((g): g is NonNullable<typeof g> => Boolean(g))
+      .map(g => ({ id: g.id, name: g.name, url: g.url }));
+
+    const sessionId = createId('ext_session');
+    setAutoResults([]);
+    setAutoProgress({ current: 0, total: extGroups.length, group: '' });
+    setAutoRunning(true);
+
+    const firstItem = pendingItems[0];
+    const firstPost = postStorage.getAll().find(p => p.id === firstItem?.postId);
+    const caption = firstPost
+      ? [firstPost.title, firstPost.caption, firstPost.link, firstPost.hashtags].filter(Boolean).join('\n\n').trim()
+      : '';
+
+    const result = await startExtensionSession({ sessionId, postUrl: autoPostUrl.trim(), groups: extGroups, caption });
+    if (!result.ok) {
+      setAutoRunning(false);
+      setAutoProgress(null);
+      addNotification('error', 'เริ่ม Auto Share ไม่สำเร็จ', result.error || 'ไม่ทราบสาเหตุ');
+    } else {
+      addNotification('info', 'Auto Share เริ่มแล้ว', `กำลังแชร์ไปยัง ${extGroups.length} กลุ่ม`);
+    }
+  }, [selectedCampaign, autoPostUrl, addNotification]);
+
+  const handleCancelAutoShare = useCallback(async () => {
+    await cancelExtensionSession();
+    setAutoRunning(false);
+    setAutoProgress(null);
+  }, []);
+
+  // Suppress unused-variable warning for posts (used in handleStartAutoShare via closure)
+  void posts;
 
   const groupMap = new Map(groups.map((g) => [g.id, g]));
   const postMap = new Map(posts.map((p) => [p.id, p]));
@@ -211,6 +315,11 @@ export function ShareSession() {
     copyTextToClipboard(text).then(() => addNotification('success', 'คัดลอกสรุปแล้ว', ''));
   }
 
+  // Auto summary counts
+  const autoPosted  = autoResults.filter(r => r.status === 'posted').length;
+  const autoPending = autoResults.filter(r => r.status === 'pending_admin').length;
+  const autoFailed  = autoResults.filter(r => r.status === 'failed').length;
+
   // If not active, show setup
   if (!isActive) {
     return (
@@ -220,16 +329,105 @@ export function ShareSession() {
           <p className="page-subtitle">เริ่ม Session เพื่อแชร์โพสต์ลงกลุ่มทีละกลุ่ม</p>
         </div>
 
-        <div className="disclaimer-banner">
+        {/* Auto Share via Extension */}
+        {extInstalled && (
+          <div className="card" style={{ maxWidth: '560px', marginBottom: '1.5rem', border: '1px solid rgba(255,107,43,0.35)', background: 'linear-gradient(135deg,rgba(255,107,43,0.06) 0%,rgba(30,30,46,0.9) 100%)' }}>
+            <div className="section-title" style={{ color: 'var(--accent-text)' }}>🤖 Auto Share (PGSC Extension)</div>
+            <div className="text-sm text-secondary mb-2" style={{ lineHeight: 1.5 }}>
+              Extension ตรวจพบแล้ว ✅ — ระบบจะแชร์โพสต์ผ่าน Native Share Dialog ของ Facebook ให้อัตโนมัติ
+            </div>
+            <div className="form-group">
+              <label className="form-label">แคมเปญ</label>
+              <select className="form-select" value={selectedCampaign} onChange={(e) => handleCampaignChange(e.target.value)} disabled={autoRunning}>
+                <option value="">— เลือกแคมเปญ —</option>
+                {campaigns.map((c) => {
+                  const pending = queueStorage.getByCampaign(c.id).filter((q) => q.status === 'not_started').length;
+                  return <option key={c.id} value={c.id}>{c.name} ({pending} รายการรอ)</option>;
+                })}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">URL โพสต์ Facebook ที่ต้องการแชร์</label>
+              <input
+                className="form-input"
+                type="url"
+                placeholder="https://www.facebook.com/Pepsproduction/posts/..."
+                value={autoPostUrl}
+                onChange={(e) => setAutoPostUrl(e.target.value)}
+                disabled={autoRunning}
+              />
+            </div>
+            {(autoRunning || autoResults.length > 0) && (
+              <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: '10px', padding: '1rem', marginBottom: '1rem' }}>
+                {autoProgress && (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#aaa', marginBottom: '6px' }}>
+                      <span>⏳ กำลังแชร์: <strong style={{ color: '#fff' }}>{autoProgress.group || '...'}</strong></span>
+                      <span>{Math.min(autoProgress.current, autoProgress.total)} / {autoProgress.total}</span>
+                    </div>
+                    <div style={{ height: '8px', background: '#2a2a40', borderRadius: '4px', overflow: 'hidden', marginBottom: '10px' }}>
+                      <div style={{ height: '100%', background: 'linear-gradient(90deg,#FF6B2B,#FF8C42)', borderRadius: '4px', transition: 'width 0.5s ease', width: autoProgress.total > 0 ? `${(autoProgress.current / autoProgress.total) * 100}%` : '0%' }} />
+                    </div>
+                  </>
+                )}
+                <div style={{ display: 'flex', gap: '1rem', fontSize: '13px' }}>
+                  <span style={{ color: '#4CAF50' }}>✅ {autoPosted} โพสต์</span>
+                  <span style={{ color: '#FFA726' }}>⏳ {autoPending} รอแอดมิน</span>
+                  <span style={{ color: '#ef5350' }}>❌ {autoFailed} ล้มเหลว</span>
+                </div>
+                {autoResults.length > 0 && (
+                  <div style={{ maxHeight: '160px', overflowY: 'auto', marginTop: '10px' }}>
+                    {[...autoResults].reverse().map((r, i) => (
+                      <div key={i} style={{ fontSize: '12px', padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: '#ccc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '75%' }}>{r.group}</span>
+                        <span style={{ color: r.status === 'posted' ? '#4CAF50' : r.status === 'pending_admin' ? '#FFA726' : '#ef5350', flexShrink: 0 }}>
+                          {r.status === 'posted' ? '✅' : r.status === 'pending_admin' ? '⏳' : '❌'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="flex gap-1">
+              {!autoRunning ? (
+                <button
+                  className="btn btn-primary"
+                  style={{ flex: 1, background: 'linear-gradient(135deg,#FF6B2B,#FF8C42)', fontWeight: 700 }}
+                  onClick={handleStartAutoShare}
+                  disabled={!selectedCampaign || !autoPostUrl.trim()}
+                >
+                  🤖 เริ่ม Auto Share
+                </button>
+              ) : (
+                <button className="btn btn-danger" style={{ flex: 1 }} onClick={handleCancelAutoShare}>
+                  ⛔ หยุด Auto Share
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {!extInstalled && (
+          <div className="disclaimer-banner" style={{ maxWidth: '560px', marginBottom: '1.5rem', borderColor: 'rgba(255,107,43,0.25)' }}>
+            <span className="disclaimer-icon">🔌</span>
+            <div>
+              <strong style={{ color: 'var(--accent-text)' }}>ต้องการแชร์อัตโนมัติ?</strong>
+              {' '}ติดตั้ง <strong>PGSC Share Helper Extension</strong> จากโฟลเดอร์ <code>pgsc-extension/</code> แล้วโหลดหน้าใหม่
+            </div>
+          </div>
+        )}
+
+        <div className="disclaimer-banner" style={{ maxWidth: '560px' }}>
           <span className="disclaimer-icon">🛡️</span>
           <div>
-            <strong style={{ color: 'var(--accent-text)' }}>คุณต้องเป็นผู้กดโพสต์เองทุกครั้ง</strong>
+            <strong style={{ color: 'var(--accent-text)' }}>Manual Mode: คุณต้องเป็นผู้กดโพสต์เองทุกครั้ง</strong>
             {' '}ระบบนี้จะเปิดแท็บกลุ่มให้เท่านั้น ไม่มีการโพสต์อัตโนมัติ
           </div>
         </div>
 
-        <div className="card" style={{ maxWidth: '560px' }}>
-          <div className="section-title">🚀 เลือกแคมเปญที่จะแชร์</div>
+        <div className="card" style={{ maxWidth: '560px', marginTop: '1rem' }}>
+          <div className="section-title">🚀 เลือกแคมเปญที่จะแชร์ (Manual)</div>
           <div className="form-group">
             <label className="form-label">แคมเปญ</label>
             <select className="form-select" value={selectedCampaign} onChange={(e) => handleCampaignChange(e.target.value)}>
@@ -250,7 +448,7 @@ export function ShareSession() {
             onClick={startSession}
             disabled={!selectedCampaign}
           >
-            ▶️ เริ่ม Share Session
+            ▶️ เริ่ม Share Session (Manual)
           </button>
         </div>
       </div>
@@ -308,17 +506,17 @@ export function ShareSession() {
             {currentCaption}
           </div>
           <div className="flex gap-1 mb-2" style={{ flexWrap: 'wrap', width: '100%' }}>
-            <button 
-              className="btn btn-primary" 
-              style={{ flex: '2 1 200px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '0.75rem 1rem', fontSize: '1rem', fontWeight: 'bold' }} 
-              onClick={handleOpenAndCopy} 
+            <button
+              className="btn btn-primary"
+              style={{ flex: '2 1 200px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '0.75rem 1rem', fontSize: '1rem', fontWeight: 'bold' }}
+              onClick={handleOpenAndCopy}
               aria-label="เปิดกลุ่มและคัดลอกแคปชั่น"
             >
-              🚀 เปิดกลุ่ม & คัดลอกแคปชั่น (ใช้แท็บเดิม)
+              🚀 เปิดกลุ่ม &amp; คัดลอกแคปชั่น (ใช้แท็บเดิม)
             </button>
-            <button 
-              className="btn btn-secondary" 
-              style={{ flex: '1 1 120px' }} 
+            <button
+              className="btn btn-secondary"
+              style={{ flex: '1 1 120px' }}
               onClick={copyCaption}
               aria-label="คัดลอกแคปชั่น"
             >

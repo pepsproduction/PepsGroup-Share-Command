@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PGSC Share Helper</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="header">
+    <div class="logo">🚀</div>
+    <div class="title">PGSC Share Helper</div>
+  </div>
+
+  <div id="status-section" class="section">
+    <div class="status-row">
+      <span class="status-dot" id="status-dot"></span>
+      <span id="status-text">กำลังตรวจสอบ...</span>
+    </div>
+  </div>
+
+  <div id="session-section" class="section hidden">
+    <div class="section-title">Session ปัจจุบัน</div>
+    <div class="progress-row">
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-fill" id="progress-fill"></div>
+      </div>
+      <span id="progress-label">0 / 0</span>
+    </div>
+    <div id="session-status" class="session-status"></div>
+    <button id="btn-cancel" class="btn btn-danger">⛔ ยกเลิก Session</button>
+  </div>
+
+  <div id="no-session-section" class="section">
+    <div class="hint">ไม่มี Session ที่กำลังทำงาน</div>
+    <div class="hint-small">เริ่มจากหน้า Share Session ในเว็บ PepsGroup</div>
+  </div>
+
+  <div class="footer">
+    <a href="https://pepsproduction.github.io/PepsGroup-Share-Command/" target="_blank" rel="noopener">
+      เปิด PepsGroup Share Command
+    </a>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
