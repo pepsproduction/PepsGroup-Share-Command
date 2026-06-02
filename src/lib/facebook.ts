@@ -2,6 +2,42 @@
 // FACEBOOK UTILITIES — Safe, Manual-only helpers
 // =====================================================
 
+let rememberedFbTab: Window | null = null;
+
+const FB_SHARE_TAB_STORAGE_KEY = 'pgsc_fb_share_tab_name';
+const DEFAULT_FB_SHARE_TAB_NAME = 'pgsc_fb_share_tab';
+const GROUP_ID_PATTERN = /(?:facebook\.com)?\/groups\/([a-zA-Z0-9._-]+)/i;
+const GROUP_URL_PATTERN = /(?:https?:\/\/(?:www\.)?facebook\.com)?\/groups\/([a-zA-Z0-9._-]+)/i;
+const MEMBER_COUNT_PATTERN = /(?:สมาชิก|members?)\s*([^\n]+)/i;
+
+interface ImportedGroupLike {
+  name?: unknown;
+  url?: unknown;
+  memberCount?: unknown;
+}
+
+function getShareTabName(targetName: string): string {
+  try {
+    const saved = sessionStorage.getItem(FB_SHARE_TAB_STORAGE_KEY);
+    if (saved) return saved;
+    sessionStorage.setItem(FB_SHARE_TAB_STORAGE_KEY, targetName);
+  } catch {
+    // Session storage can be unavailable in restricted browser modes.
+  }
+  return targetName;
+}
+
+function extractMemberCount(text: string): string {
+  const match = text.match(MEMBER_COUNT_PATTERN);
+  if (!match) return '';
+  const line = match[0].split('\n')[0].trim();
+  return /\d/.test(line) ? line : '';
+}
+
+function isImportedGroupLike(item: unknown): item is ImportedGroupLike {
+  return typeof item === 'object' && item !== null && 'url' in item;
+}
+
 /**
  * Build a Facebook Group Search URL for a given keyword.
  * Opens in new tab — does NOT auto-interact with Facebook.
@@ -56,8 +92,34 @@ export function normalizeFbGroupUrl(url: string): string {
  * Reuses the same tab by using a target name ('fb_share_tab') by default.
  */
 export function openInNewTab(url: string, targetName: string = 'fb_share_tab'): void {
+  openInReusableTab(url, targetName);
+}
+
+/**
+ * Open a URL in the same remembered browser tab every time.
+ * This keeps a WindowProxy when possible and also uses a stable target name,
+ * so later clicks navigate the existing Facebook tab instead of spawning more tabs.
+ */
+export function openInReusableTab(url: string, targetName: string = DEFAULT_FB_SHARE_TAB_NAME): void {
   const normalized = isFbGroupUrl(url) ? normalizeFbGroupUrl(url) : url;
-  window.open(normalized, targetName);
+  const reusableTarget = getShareTabName(targetName);
+
+  try {
+    if (!rememberedFbTab || rememberedFbTab.closed) {
+      rememberedFbTab = window.open('', reusableTarget);
+    }
+
+    if (rememberedFbTab) {
+      rememberedFbTab.location.href = normalized;
+      rememberedFbTab.focus();
+      return;
+    }
+  } catch {
+    rememberedFbTab = null;
+  }
+
+  rememberedFbTab = window.open(normalized, reusableTarget);
+  rememberedFbTab?.focus();
 }
 
 /**
@@ -79,7 +141,7 @@ export function parseFbGroupsFromHtml(html: string): Array<{ name: string; url: 
 
   links.forEach((a) => {
     const href = a.getAttribute('href') || '';
-    const match = href.match(/(?:facebook\.com)?\/groups\/([a-zA-Z0-9\._\-]+)/i);
+    const match = href.match(GROUP_ID_PATTERN);
     if (match) {
       const groupId = match[1];
       if (['feed', 'search', 'discover', 'joins', 'create', 'categories'].includes(groupId.toLowerCase())) {
@@ -103,9 +165,9 @@ export function parseFbGroupsFromHtml(html: string): Array<{ name: string; url: 
           let parent = a.parentElement;
           for (let i = 0; i < 3 && parent; i++) {
             const text = parent.innerText || '';
-            const m = text.match(/(?:สมาชิก|members?)\s*([0-9\.,kKหมื่นแสนล้าน\s]+)/i);
-            if (m) {
-              memberCount = m[0].split('\n')[0].trim();
+            const count = extractMemberCount(text);
+            if (count) {
+              memberCount = count;
               break;
             }
             parent = parent.parentElement;
@@ -132,15 +194,15 @@ export function parseFbGroupsFromText(text: string): Array<{ name: string; url: 
       if (Array.isArray(parsed)) {
         const groups: Array<{ name: string; url: string; memberCount?: string }> = [];
         const seen = new Set<string>();
-        parsed.forEach((item: any) => {
-          if (item && item.url && isFbGroupUrl(item.url)) {
+        parsed.forEach((item: unknown) => {
+          if (isImportedGroupLike(item) && typeof item.url === 'string' && isFbGroupUrl(item.url)) {
             const url = item.url.endsWith('/') ? item.url : `${item.url}/`;
             if (!seen.has(url)) {
               seen.add(url);
               groups.push({
-                name: item.name ? item.name.trim() : `กลุ่มนำเข้า #${Date.now()}`,
+                name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : `กลุ่มนำเข้า #${Date.now()}`,
                 url,
-                memberCount: item.memberCount || ''
+                memberCount: typeof item.memberCount === 'string' ? item.memberCount : ''
               });
             }
           }
@@ -148,7 +210,7 @@ export function parseFbGroupsFromText(text: string): Array<{ name: string; url: 
         if (groups.length > 0) return groups;
       }
     }
-  } catch (e) {
+  } catch {
     // Fall back to line parsing
   }
 
@@ -158,7 +220,7 @@ export function parseFbGroupsFromText(text: string): Array<{ name: string; url: 
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const match = line.match(/(?:https?:\/\/(?:www\.)?facebook\.com)?\/groups\/([a-zA-Z0-9\._\-]+)/i);
+    const match = line.match(GROUP_URL_PATTERN);
     if (match) {
       const groupId = match[1];
       if (['feed', 'search', 'discover', 'joins', 'create', 'categories'].includes(groupId.toLowerCase())) {
@@ -183,9 +245,9 @@ export function parseFbGroupsFromText(text: string): Array<{ name: string; url: 
         for (const idx of range) {
           if (idx >= 0 && idx < lines.length) {
             const l = lines[idx];
-            const m = l.match(/(?:สมาชิก|members?)\s*([0-9\.,kKหมื่นแสนล้าน\s]+)/i);
-            if (m) {
-              memberCount = l.trim();
+            const count = extractMemberCount(l);
+            if (count) {
+              memberCount = count;
               break;
             }
             if (l.includes('คน') || l.toLowerCase().includes('members')) {
@@ -276,4 +338,3 @@ export function guessMemberCount(name: string): string {
     return `ประมาณ ${m}.5 แสนคน`;
   }
 }
-

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { Group, QualityScore } from '../types';
 import { groupStorage } from '../lib/storage';
 import { buildFbGroupSearchUrl, openInNewTab, isFbGroupUrl, parseFbGroupsFromHtml, parseFbGroupsFromText, guessCategoryByName, guessMemberCount, normalizeFbGroupUrl } from '../lib/facebook';
-import { useNotifications } from '../components/NotificationCenter';
+import { useNotifications } from '../components/NotificationContexts';
 import { isoNow } from '../lib/date';
 
 interface ImportItem {

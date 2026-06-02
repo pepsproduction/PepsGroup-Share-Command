@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import type { ShareQueueItem, ShareItemStatus } from '../types';
 import { queueStorage, groupStorage, campaignStorage } from '../lib/storage';
-import { useNotifications } from '../components/NotificationCenter';
+import { useNotifications } from '../components/NotificationContexts';
 import { openInNewTab } from '../lib/facebook';
 import { formatDateTime, isoNow } from '../lib/date';
 import { ShareStatusBadge } from '../components/Badge';
@@ -20,7 +20,7 @@ export function PendingApproval() {
 
   const pending = queue.filter((q) => q.status === 'pending_admin');
   const approved = queue.filter((q) => q.status === 'approved');
-  const rejected = queue.filter((q) => q.status === 'rejected');
+  const rejected = queue.filter((q) => q.status === 'rejected' || q.status === 'deleted');
 
   function updateStatus(item: ShareQueueItem, status: ShareItemStatus) {
     const now = isoNow();

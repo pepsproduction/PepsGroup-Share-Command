@@ -1,6 +1,9 @@
-import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import type { NotificationType, NotificationItem } from '../types';
 import { notificationStorage } from '../lib/storage';
+import { createId } from '../lib/ids';
+import { NotifContext, ToastContext, useNotifications } from './NotificationContexts';
+import { formatRelative } from '../lib/date';
 
 // =====================================================
 // TOAST CONTEXT
@@ -12,16 +15,6 @@ interface ToastData {
   message?: string;
 }
 
-interface ToastContextValue {
-  showToast: (type: NotificationType, title: string, message?: string) => void;
-}
-
-const ToastContext = createContext<ToastContextValue>({ showToast: () => {} });
-export const useToast = () => useContext(ToastContext);
-
-// =====================================================
-// TOAST COMPONENT
-// =====================================================
 const ICON_MAP: Record<NotificationType, string> = {
   success: '✅',
   error: '❌',
@@ -50,38 +43,18 @@ function ToastItem({ toast, onClose }: { toast: ToastData; onClose: () => void }
 // =====================================================
 // NOTIFICATION CENTER CONTEXT
 // =====================================================
-interface NotifContextValue {
-  notifications: NotificationItem[];
-  unreadCount: number;
-  addNotification: (type: NotificationType, title: string, message: string) => void;
-  markRead: (id: string) => void;
-  markAllRead: () => void;
-}
-
-const NotifContext = createContext<NotifContextValue>({
-  notifications: [],
-  unreadCount: 0,
-  addNotification: () => {},
-  markRead: () => {},
-  markAllRead: () => {},
-});
-export const useNotifications = () => useContext(NotifContext);
-
-// =====================================================
-// PROVIDER
-// =====================================================
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<ToastData[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>(() => notificationStorage.getAll());
 
   const showToast = useCallback((type: NotificationType, title: string, message?: string) => {
-    const id = `toast_${Date.now()}_${Math.random()}`;
+    const id = createId('toast');
     setToasts((prev) => [...prev, { id, type, title, message }]);
   }, []);
 
   const addNotification = useCallback((type: NotificationType, title: string, message: string) => {
     const item: NotificationItem = {
-      id: `notif_${Date.now()}`,
+      id: createId('notif'),
       type, title, message,
       createdAt: new Date().toISOString(),
       read: false,
@@ -120,11 +93,6 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     </NotifContext.Provider>
   );
 }
-
-// =====================================================
-// NOTIFICATION BELL + PANEL
-// =====================================================
-import { formatRelative } from '../lib/date';
 
 export function NotificationCenter() {
   const { notifications, unreadCount, markRead, markAllRead } = useNotifications();

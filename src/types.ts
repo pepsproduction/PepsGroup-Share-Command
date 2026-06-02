@@ -140,6 +140,20 @@ export interface AppSettings {
   theme: ThemeMode;
   categories: string[];
   captionTemplates: Record<string, string>;
+  automation: AutomationSettings;
+}
+
+export interface AutomationSettings {
+  smartQueueEnabled: boolean;
+  skipBlacklisted: boolean;
+  skipCooldown: boolean;
+  skipNoLinkGroups: boolean;
+  remindersEnabled: boolean;
+  browserNotificationsEnabled: boolean;
+  approvalReminderHours: number;
+  leadFollowUpDays: number;
+  backupReminderDays: number;
+  syncWebhookUrl: string;
 }
 
 // Share Session state

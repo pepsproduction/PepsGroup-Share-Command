@@ -1,4 +1,4 @@
-import type { ShareQueueItem, Campaign, Group } from '../types';
+import type { ShareQueueItem, Campaign, Group, Lead } from '../types';
 import { groupStorage } from './storage';
 
 // =====================================================
@@ -75,6 +75,28 @@ export function exportGroupsCsv(groups: Group[]): string {
     g.lastPostedAt || '',
     g.isBlacklisted ? 'ใช่' : 'ไม่',
     g.rulesNote,
+  ].map(escapeCsv).join(','));
+
+  return [headers.join(','), ...rows].join('\n');
+}
+
+export function exportLeadsCsv(leads: Lead[], groups: Group[], campaigns: Campaign[]): string {
+  const groupMap = new Map(groups.map((group) => [group.id, group]));
+  const campaignMap = new Map(campaigns.map((campaign) => [campaign.id, campaign]));
+  const headers = [
+    'วันที่สร้าง', 'แคมเปญ', 'กลุ่ม', 'ชื่อลูกค้า', 'บริการที่สนใจ',
+    'มูลค่าประเมิน', 'สถานะ', 'รายละเอียด',
+  ];
+
+  const rows = leads.map((lead) => [
+    lead.createdAt,
+    campaignMap.get(lead.campaignId)?.name || lead.campaignId,
+    groupMap.get(lead.groupId)?.name || lead.groupId,
+    lead.customerName,
+    lead.serviceInterest,
+    lead.valueEstimate,
+    lead.status,
+    lead.contactNote,
   ].map(escapeCsv).join(','));
 
   return [headers.join(','), ...rows].join('\n');

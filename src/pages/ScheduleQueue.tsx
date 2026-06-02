@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import type { ShareQueueItem } from '../types';
 import { queueStorage, campaignStorage, groupStorage } from '../lib/storage';
-import { useNotifications } from '../components/NotificationCenter';
+import { useNotifications } from '../components/NotificationContexts';
 import { ShareStatusBadge } from '../components/Badge';
 import { formatDateTime, isOverdue, isToday, isTomorrow, isoNow } from '../lib/date';
 import { openInNewTab } from '../lib/facebook';

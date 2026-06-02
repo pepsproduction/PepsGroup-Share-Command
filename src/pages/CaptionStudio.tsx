@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import type { CaptionPost, CaptionVariant } from '../types';
 import { postStorage } from '../lib/storage';
-import { useNotifications } from '../components/NotificationCenter';
+import { useNotifications } from '../components/NotificationContexts';
 import { ConfirmModal } from '../components/Modal';
 import { isoNow } from '../lib/date';
 
@@ -121,8 +121,8 @@ export function CaptionStudio() {
   }
 
   function deletePost(id: string) {
-    postStorage.delete(id);
-    addNotification('info', 'ลบโพสต์แล้ว', '');
+    postStorage.deleteWithRelations(id);
+    addNotification('info', 'ลบโพสต์แล้ว', 'ลบแคมเปญและคิวที่ใช้โพสต์นี้แล้ว');
     const remaining = postStorage.getAll();
     setPosts(remaining);
     setSelectedPost(remaining[0] || null);
