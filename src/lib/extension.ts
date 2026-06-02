@@ -72,9 +72,8 @@ export function isExtensionInstalled(): boolean {
 
 /** Ping the extension to verify it's responding */
 export async function pingExtension(): Promise<boolean> {
-  if (!isExtensionInstalled()) return false;
   try {
-    const res = await sendToExtension<{ ok?: boolean }>({ type: 'PGSC_CHECK_INSTALLED' }, 3000);
+    const res = await sendToExtension<{ ok?: boolean }>({ type: 'PGSC_CHECK_INSTALLED' }, 1500);
     return res?.ok === true;
   } catch {
     return false;

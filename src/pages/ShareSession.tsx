@@ -75,22 +75,33 @@ export function ShareSession() {
 
   // Detect extension on mount
   useEffect(() => {
-    const check = () => {
-      if (isExtensionInstalled()) {
-        pingExtension().then(ok => setExtInstalled(ok));
-        return true;
-      }
-      return false;
-    };
-    if (!check()) {
-      // Retry in case of race condition
-      const t1 = setTimeout(check, 300);
-      const t2 = setTimeout(check, 1000);
-      return () => {
-        clearTimeout(t1);
-        clearTimeout(t2);
-      };
+    // 1. If global variable is already set, verify via ping
+    if (isExtensionInstalled()) {
+      pingExtension().then(ok => setExtInstalled(ok));
     }
+
+    // 2. Always attempt a direct ping as fallback (works on older extension version too)
+    pingExtension().then(ok => {
+      if (ok) setExtInstalled(true);
+    });
+
+    // 3. Retry checks to handle race conditions during page load
+    const t1 = setTimeout(() => {
+      pingExtension().then(ok => {
+        if (ok) setExtInstalled(true);
+      });
+    }, 500);
+
+    const t2 = setTimeout(() => {
+      pingExtension().then(ok => {
+        if (ok) setExtInstalled(true);
+      });
+    }, 1500);
+
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
   }, []);
 
   // Subscribe to extension events
