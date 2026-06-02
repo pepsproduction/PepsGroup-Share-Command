@@ -49,6 +49,30 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
 // Messages from content scripts
 // ---------------------
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'PGSC_CHECK_INSTALLED') {
+    sendResponse({ ok: true, version: PGSC_VERSION });
+    return;
+  }
+
+  if (message.type === 'PGSC_START_SESSION') {
+    handleStartSession(message).then(sendResponse).catch(err =>
+      sendResponse({ ok: false, error: err.message })
+    );
+    return true; // async
+  }
+
+  if (message.type === 'PGSC_CANCEL_SESSION') {
+    cancelSession().then(sendResponse).catch(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (message.type === 'PGSC_GET_SESSION') {
+    chrome.storage.local.get('pgsc_session').then(({ pgsc_session }) =>
+      sendResponse({ ok: true, session: pgsc_session || null })
+    );
+    return true;
+  }
+
   if (message.type === 'PGSC_FB_READY') {
     // Facebook content script is ready on the post page
     handleFbReady(sender.tab, sendResponse);
