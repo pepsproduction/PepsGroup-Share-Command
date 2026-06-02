@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import type { Group, Campaign } from '../types';
-import { groupStorage, campaignStorage, queueStorage } from '../lib/storage';
+import { groupStorage, campaignStorage, queueStorage, postStorage, settingsStorage } from '../lib/storage';
 import { daysSince } from '../lib/date';
-import { useNotifications } from '../components/NotificationCenter';
+import { useNotifications } from '../components/NotificationContexts';
 import { GroupStatusBadge, QualityBadge, LinkBadge } from '../components/Badge';
 import { Modal } from '../components/Modal';
-import type { ShareQueueItem } from '../types';
 import { isoNow } from '../lib/date';
+import { createQueueItemsFromPlan, planSmartQueue, summarizeSkipped } from '../lib/automation';
 
 type GradeFilter = 'all' | 'AB' | 'A' | 'cooldown';
 
@@ -54,29 +54,51 @@ export function GroupSelector() {
   const noLinkCount = selectedGroups.filter((g) => !g.allowLinks).length;
   const tooSoonCount = selectedGroups.filter((g) => daysSince(g.lastPostedAt) < g.cooldownDays).length;
   const hasWarning = selectedGroups.some((g) => !g.allowLinks || g.isBlacklisted || daysSince(g.lastPostedAt) < g.cooldownDays);
+  const targetCampaignData = campaigns.find((c) => c.id === targetCampaign);
+  const targetPost = targetCampaignData ? postStorage.getById(targetCampaignData.postId) : undefined;
+  const previewPlan = targetCampaignData ? planSmartQueue({
+    campaignId: targetCampaignData.id,
+    selectedGroupIds: Array.from(selected),
+    groups,
+    existingQueue: queueStorage.getAll(),
+    post: targetPost,
+    settings: settingsStorage.get().automation,
+  }) : null;
 
   function handleAddToQueue() {
     if (!targetCampaign || selected.size === 0) {
       addNotification('warning', 'กรุณาเลือกแคมเปญและกลุ่ม', '');
       return;
     }
+    const campaign = campaigns.find((c) => c.id === targetCampaign);
+    if (!campaign) {
+      addNotification('error', 'ไม่พบแคมเปญ', 'กรุณาเลือกแคมเปญใหม่');
+      return;
+    }
+    const post = postStorage.getById(campaign.postId);
+    const plan = planSmartQueue({
+      campaignId: campaign.id,
+      selectedGroupIds: Array.from(selected),
+      groups,
+      existingQueue: queueStorage.getAll(),
+      post,
+      settings: settingsStorage.get().automation,
+    });
+    if (plan.eligibleGroups.length === 0) {
+      addNotification('warning', 'Smart Queue ไม่พบกลุ่มที่พร้อม', summarizeSkipped(plan.skipped) || 'ตรวจสอบ cooldown, blacklist หรือกฎห้ามลิงก์');
+      return;
+    }
     const now = isoNow();
-    const items: ShareQueueItem[] = Array.from(selected).map((groupId) => ({
-      id: `qi_${Date.now()}_${groupId}`,
-      campaignId: targetCampaign,
-      postId: campaigns.find((c) => c.id === targetCampaign)?.postId || '',
-      groupId,
+    const items = createQueueItemsFromPlan({
+      plan,
+      campaignId: campaign.id,
+      postId: campaign.postId,
       scheduledAt: null,
-      status: 'not_started',
-      submittedAt: null,
-      approvedAt: null,
-      rejectedAt: null,
-      note: '',
-      createdAt: now,
-      updatedAt: now,
-    }));
+      now,
+    });
     queueStorage.addMany(items);
-    addNotification('success', 'เพิ่มเข้าคิวสำเร็จ', `เพิ่ม ${items.length} กลุ่มเข้าคิวแคมเปญแล้ว`);
+    const skippedText = plan.skipped.length > 0 ? ` ข้าม ${plan.skipped.length} กลุ่ม: ${summarizeSkipped(plan.skipped)}` : '';
+    addNotification('success', 'เพิ่มเข้าคิวสำเร็จ', `เพิ่ม ${items.length} กลุ่มเข้าคิวแคมเปญแล้ว${skippedText}`);
     setShowSummary(false);
     setSelected(new Set());
   }
@@ -216,6 +238,21 @@ export function GroupSelector() {
             {campaigns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </div>
+        {previewPlan && (
+          <div className="disclaimer-banner" style={{ marginTop: '1rem', marginBottom: 0 }}>
+            <span className="disclaimer-icon">⚡</span>
+            <div>
+              <strong style={{ color: 'var(--accent-text)' }}>
+                Smart Queue จะเพิ่ม {previewPlan.eligibleGroups.length} กลุ่ม
+              </strong>
+              {previewPlan.skipped.length > 0 && (
+                <div className="text-xs text-secondary mt-1">
+                  ข้าม {previewPlan.skipped.length} กลุ่ม: {summarizeSkipped(previewPlan.skipped)}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

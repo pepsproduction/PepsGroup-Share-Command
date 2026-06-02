@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import type { AppSettings, ThemeMode } from '../types';
 import { settingsStorage, exportAllData, importAllData, clearAllData, groupStorage } from '../lib/storage';
-import { useNotifications } from '../components/NotificationCenter';
+import { useNotifications } from '../components/NotificationContexts';
 import { ConfirmModal } from '../components/Modal';
 import { downloadJson } from '../lib/exporters';
 import { exportGroupsCsv, downloadFile } from '../lib/exporters';
+import { BACKUP_MARKER_KEY } from '../lib/automation';
 
 export function Settings() {
   const { addNotification } = useNotifications();
@@ -12,12 +13,20 @@ export function Settings() {
   const [showClear, setShowClear] = useState(false);
   const [newCategory, setNewCategory] = useState('');
 
-  function saveSettings(updated: AppSettings) {
+  function saveSettings(updated: AppSettings, notify = true) {
     settingsStorage.save(updated);
     setSettings(updated);
     // Apply theme
     document.documentElement.setAttribute('data-theme', updated.theme);
-    addNotification('success', 'บันทึกการตั้งค่าแล้ว', '');
+    if (notify) addNotification('success', 'บันทึกการตั้งค่าแล้ว', '');
+  }
+
+  function saveAutomation(updated: Partial<AppSettings['automation']>) {
+    saveSettings({ ...settings, automation: { ...settings.automation, ...updated } }, false);
+  }
+
+  function reloadSoon() {
+    window.setTimeout(() => window.location.reload(), 800);
   }
 
   function handleTheme(theme: ThemeMode) {
@@ -43,6 +52,7 @@ export function Settings() {
   function handleExportAll() {
     const data = exportAllData();
     downloadJson(data, `pgsc-backup-${new Date().toISOString().slice(0, 10)}.json`);
+    localStorage.setItem(BACKUP_MARKER_KEY, new Date().toISOString());
     addNotification('success', 'Export JSON สำเร็จ', 'บันทึกข้อมูลทั้งหมดแล้ว');
   }
 
@@ -66,6 +76,7 @@ export function Settings() {
           const data = JSON.parse(ev.target?.result as string);
           importAllData(data);
           addNotification('success', 'Import สำเร็จ', 'นำเข้าข้อมูลเรียบร้อย รีเฟรชหน้าเพื่อดูผล');
+          reloadSoon();
         } catch {
           addNotification('error', 'Import ล้มเหลว', 'ไฟล์ JSON ไม่ถูกต้อง');
         }
@@ -78,6 +89,39 @@ export function Settings() {
   function handleClearAll() {
     clearAllData();
     addNotification('info', 'ล้างข้อมูลทั้งหมดแล้ว', 'รีเฟรชหน้าเพื่อเริ่มใหม่');
+    reloadSoon();
+  }
+
+  function handleBrowserNotificationPermission() {
+    if (!('Notification' in window)) {
+      addNotification('warning', 'Browser นี้ไม่รองรับ Notification', '');
+      return;
+    }
+    Notification.requestPermission().then((permission) => {
+      const enabled = permission === 'granted';
+      saveAutomation({ browserNotificationsEnabled: enabled });
+      addNotification(enabled ? 'success' : 'warning', enabled ? 'เปิด Browser Notification แล้ว' : 'ยังไม่ได้รับสิทธิ์ Notification', '');
+    });
+  }
+
+  async function handleWebhookSync() {
+    const url = settings.automation.syncWebhookUrl.trim();
+    if (!url) {
+      addNotification('warning', 'กรุณาใส่ Webhook URL', '');
+      return;
+    }
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(exportAllData()),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      localStorage.setItem(BACKUP_MARKER_KEY, new Date().toISOString());
+      addNotification('success', 'Sync สำเร็จ', 'ส่งข้อมูล backup ไปยัง webhook แล้ว');
+    } catch (error) {
+      addNotification('error', 'Sync ล้มเหลว', error instanceof Error ? error.message : 'ไม่สามารถส่งข้อมูลได้');
+    }
   }
 
   const themes: { key: ThemeMode; label: string; desc: string }[] = [
@@ -153,6 +197,62 @@ export function Settings() {
               onKeyDown={(e) => e.key === 'Enter' && addCategory()}
             />
             <button className="btn btn-primary" onClick={addCategory}>➕ เพิ่ม</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Automation */}
+      <div className="section">
+        <div className="section-title">⚡ Automation</div>
+        <div className="card">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+            <label className="form-check">
+              <input type="checkbox" checked={settings.automation.smartQueueEnabled} onChange={(e) => saveAutomation({ smartQueueEnabled: e.target.checked })} />
+              <div>
+                <div className="font-bold text-sm">Smart Queue</div>
+                <div className="text-xs text-muted">กันคิวซ้ำ เรียงกลุ่มคุณภาพ และข้ามกลุ่มที่เสี่ยงตามตัวเลือกด้านล่าง</div>
+              </div>
+            </label>
+            <div className="form-row-3">
+              <label className="form-check"><input type="checkbox" checked={settings.automation.skipBlacklisted} onChange={(e) => saveAutomation({ skipBlacklisted: e.target.checked })} /> ข้าม blacklist</label>
+              <label className="form-check"><input type="checkbox" checked={settings.automation.skipCooldown} onChange={(e) => saveAutomation({ skipCooldown: e.target.checked })} /> ข้าม cooldown</label>
+              <label className="form-check"><input type="checkbox" checked={settings.automation.skipNoLinkGroups} onChange={(e) => saveAutomation({ skipNoLinkGroups: e.target.checked })} /> ข้ามกลุ่มห้ามลิงก์</label>
+            </div>
+            <div className="divider" />
+            <label className="form-check">
+              <input type="checkbox" checked={settings.automation.remindersEnabled} onChange={(e) => saveAutomation({ remindersEnabled: e.target.checked })} />
+              <div>
+                <div className="font-bold text-sm">Reminder Engine</div>
+                <div className="text-xs text-muted">แจ้งเตือนคิววันนี้ คิวเกินกำหนด pending approval และ lead follow-up เมื่อเปิดเว็บ</div>
+              </div>
+            </label>
+            <div className="form-row-3">
+              <div className="form-group">
+                <label className="form-label">ติดตามรอแอดมินหลัง (ชม.)</label>
+                <input type="number" min={1} className="form-input" value={settings.automation.approvalReminderHours} onChange={(e) => saveAutomation({ approvalReminderHours: Number(e.target.value) || 24 })} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Follow-up lead หลัง (วัน)</label>
+                <input type="number" min={1} className="form-input" value={settings.automation.leadFollowUpDays} onChange={(e) => saveAutomation({ leadFollowUpDays: Number(e.target.value) || 2 })} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">เตือน backup ทุก (วัน)</label>
+                <input type="number" min={1} className="form-input" value={settings.automation.backupReminderDays} onChange={(e) => saveAutomation({ backupReminderDays: Number(e.target.value) || 7 })} />
+              </div>
+            </div>
+            <div className="flex gap-1" style={{ flexWrap: 'wrap' }}>
+              <button className="btn btn-secondary" onClick={handleBrowserNotificationPermission}>🔔 เปิด Browser Notification</button>
+              <span className="text-xs text-muted" style={{ alignSelf: 'center' }}>
+                สถานะ: {settings.automation.browserNotificationsEnabled ? 'เปิดอยู่' : 'ปิดอยู่'}
+              </span>
+            </div>
+            <div className="divider" />
+            <div className="form-group">
+              <label className="form-label">Webhook Sync URL</label>
+              <input className="form-input" value={settings.automation.syncWebhookUrl} onChange={(e) => saveAutomation({ syncWebhookUrl: e.target.value })} placeholder="https://... (เช่น Apps Script, Supabase Edge Function, Make/Zapier webhook)" />
+              <div className="text-xs text-muted mt-1">กด Sync Now เพื่อส่ง backup JSON ไปยัง endpoint ที่คุณควบคุมเอง</div>
+            </div>
+            <button className="btn btn-secondary" onClick={handleWebhookSync}>☁️ Sync Now</button>
           </div>
         </div>
       </div>

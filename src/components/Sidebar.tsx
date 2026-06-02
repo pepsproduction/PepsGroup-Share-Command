@@ -28,8 +28,6 @@ interface SidebarProps {
 }
 
 export function Sidebar({ currentPage, onNavigate, isOpen }: SidebarProps) {
-  let lastSection = '';
-
   return (
     <aside className={`sidebar ${isOpen ? 'open' : ''}`} aria-label="เมนูหลัก">
       <div className="sidebar-brand">
@@ -39,9 +37,9 @@ export function Sidebar({ currentPage, onNavigate, isOpen }: SidebarProps) {
       </div>
 
       <nav className="sidebar-nav">
-        {NAV_ITEMS.map((item) => {
-          const showSection = item.section && item.section !== lastSection;
-          if (item.section) lastSection = item.section;
+        {NAV_ITEMS.map((item, index) => {
+          const previousSection = NAV_ITEMS[index - 1]?.section;
+          const showSection = item.section && item.section !== previousSection;
           return (
             <div key={item.page}>
               {showSection && (

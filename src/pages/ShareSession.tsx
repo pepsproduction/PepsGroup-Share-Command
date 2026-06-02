@@ -1,13 +1,22 @@
-import { useState, useCallback, useEffect } from 'react';
-import type { ShareQueueItem, ShareItemStatus } from '../types';
-import { queueStorage, campaignStorage, groupStorage, postStorage } from '../lib/storage';
-import { useNotifications } from '../components/NotificationCenter';
+import { useState } from 'react';
+import type { Lead, ShareQueueItem, ShareItemStatus } from '../types';
+import { queueStorage, campaignStorage, groupStorage, postStorage, leadStorage } from '../lib/storage';
+import { useNotifications } from '../components/NotificationContexts';
 import { ShareStatusBadge, GroupStatusBadge } from '../components/Badge';
 import { Modal } from '../components/Modal';
-import { openInNewTab } from '../lib/facebook';
+import { openInReusableTab } from '../lib/facebook';
 import { computeSessionSummary, summaryToText } from '../lib/summary';
 import { isoNow } from '../lib/date';
 import { exportQueueCsv, downloadFile, downloadJson } from '../lib/exporters';
+import { buildGroupAwareCaption } from '../lib/automation';
+import { createId } from '../lib/ids';
+
+const DEFAULT_LEAD_FORM = {
+  customerName: '',
+  contactNote: '',
+  serviceInterest: '',
+  valueEstimate: '',
+};
 
 export function ShareSession() {
   const { addNotification } = useNotifications();
@@ -20,17 +29,18 @@ export function ShareSession() {
   const [isActive, setIsActive] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [noteText, setNoteText] = useState('');
+  const [showLeadForm, setShowLeadForm] = useState(false);
+  const [leadForm, setLeadForm] = useState({ ...DEFAULT_LEAD_FORM });
 
   const groupMap = new Map(groups.map((g) => [g.id, g]));
   const postMap = new Map(posts.map((p) => [p.id, p]));
 
-  const reload = useCallback(() => {
-    if (selectedCampaign) {
-      setQueueItems(queueStorage.getByCampaign(selectedCampaign));
-    }
-  }, [selectedCampaign]);
-
-  useEffect(() => { reload(); }, [reload]);
+  function handleCampaignChange(campaignId: string) {
+    setSelectedCampaign(campaignId);
+    setQueueItems(campaignId ? queueStorage.getByCampaign(campaignId) : []);
+    setCurrentIndex(0);
+    setShowSummary(false);
+  }
 
   function startSession() {
     if (!selectedCampaign) return;
@@ -45,14 +55,20 @@ export function ShareSession() {
     addNotification('info', 'เริ่ม Share Session', `${items.length} กลุ่ม พร้อมแชร์`);
   }
 
-  function updateStatus(status: ShareItemStatus) {
+  function updateStatus(status: ShareItemStatus, options?: { skipLeadPrompt?: boolean; noteOverride?: string }) {
+    if (status === 'lead_received' && !options?.skipLeadPrompt) {
+      setLeadForm({ ...DEFAULT_LEAD_FORM, contactNote: noteText });
+      setShowLeadForm(true);
+      return;
+    }
+
     const item = queueItems[currentIndex];
     if (!item) return;
     const now = isoNow();
     const updated: ShareQueueItem = {
       ...item,
       status,
-      note: noteText || item.note,
+      note: options?.noteOverride || noteText || item.note,
       submittedAt: status === 'posted' || status === 'pending_admin' ? now : item.submittedAt,
       approvedAt: status === 'approved' ? now : item.approvedAt,
       rejectedAt: status === 'rejected' ? now : item.rejectedAt,
@@ -96,27 +112,51 @@ export function ShareSession() {
   const currentItem = isActive ? queueItems[currentIndex] : null;
   const currentGroup = currentItem ? groupMap.get(currentItem.groupId) : null;
   const currentPost = currentItem ? postMap.get(currentItem.postId) : null;
+  const currentCaption = currentGroup && currentPost ? buildGroupAwareCaption(currentPost, currentGroup) : '';
   const summary = computeSessionSummary(queueItems);
 
   function copyCaption() {
-    if (!currentPost) return;
-    const text = `${currentPost.title}\n\n${currentPost.caption}\n\n${currentPost.link}\n\n${currentPost.hashtags}`;
-    navigator.clipboard.writeText(text).then(() => addNotification('success', 'คัดลอก Caption สำเร็จ!', ''));
+    if (!currentCaption) return;
+    navigator.clipboard.writeText(currentCaption).then(() => addNotification('success', 'คัดลอก Caption สำเร็จ!', ''));
   }
 
   function handleOpenAndCopy() {
-    if (!currentPost || !currentGroup) return;
-    const text = `${currentPost.title}\n\n${currentPost.caption}\n\n${currentPost.link}\n\n${currentPost.hashtags}`;
-    navigator.clipboard.writeText(text)
+    if (!currentCaption || !currentGroup) return;
+    navigator.clipboard.writeText(currentCaption)
       .then(() => {
-        addNotification('success', 'คัดลอก Caption สำเร็จ!', 'เปิดกลุ่มในแท็บหลักแล้ว กด Ctrl+V เพื่อวางและโพสต์');
-        openInNewTab(currentGroup.url, 'fb_share_tab');
+        addNotification('success', 'คัดลอก Caption สำเร็จ!', 'เปิดกลุ่มในแท็บ Facebook เดิมแล้ว กด Ctrl+V เพื่อวางและโพสต์');
+        openInReusableTab(currentGroup.url, 'pgsc_share_session_fb_tab');
       })
       .catch((err) => {
         console.error('Failed to copy caption:', err);
         addNotification('error', 'คัดลอก Caption ไม่สำเร็จ', 'กรุณากดปุ่มคัดลอก Caption ด้านข้าง');
-        openInNewTab(currentGroup.url, 'fb_share_tab');
+        openInReusableTab(currentGroup.url, 'pgsc_share_session_fb_tab');
       });
+  }
+
+  function saveLeadAndAdvance() {
+    const item = queueItems[currentIndex];
+    if (!item) return;
+    const group = groupMap.get(item.groupId);
+    const now = isoNow();
+    const lead: Lead = {
+      id: createId('lead'),
+      campaignId: item.campaignId,
+      groupId: item.groupId,
+      customerName: leadForm.customerName.trim() || `Lead จาก ${group?.name || item.groupId}`,
+      contactNote: leadForm.contactNote.trim() || noteText,
+      serviceInterest: leadForm.serviceInterest.trim(),
+      valueEstimate: leadForm.valueEstimate.trim(),
+      status: 'new',
+      createdAt: now,
+    };
+    leadStorage.add(lead);
+    setShowLeadForm(false);
+    setLeadForm({ ...DEFAULT_LEAD_FORM });
+    updateStatus('lead_received', {
+      skipLeadPrompt: true,
+      noteOverride: lead.contactNote || 'มีลูกค้าทัก',
+    });
   }
 
   function handleExportCsv() {
@@ -158,7 +198,7 @@ export function ShareSession() {
           <div className="section-title">🚀 เลือกแคมเปญที่จะแชร์</div>
           <div className="form-group">
             <label className="form-label">แคมเปญ</label>
-            <select className="form-select" value={selectedCampaign} onChange={(e) => setSelectedCampaign(e.target.value)}>
+            <select className="form-select" value={selectedCampaign} onChange={(e) => handleCampaignChange(e.target.value)}>
               <option value="">— เลือกแคมเปญ —</option>
               {campaigns.map((c) => {
                 const pending = queueStorage.getByCampaign(c.id).filter((q) => q.status === 'not_started').length;
@@ -231,7 +271,7 @@ export function ShareSession() {
           {/* Caption Preview */}
           <div className="section-title">📝 Caption</div>
           <div className="session-caption-box mb-2">
-            {currentPost.title}{'\n\n'}{currentPost.caption}{'\n\n'}{currentPost.link}{'\n\n'}{currentPost.hashtags}
+            {currentCaption}
           </div>
           <div className="flex gap-1 mb-2" style={{ flexWrap: 'wrap', width: '100%' }}>
             <button 
@@ -270,6 +310,20 @@ export function ShareSession() {
         </div>
       )}
 
+      {currentItem && (!currentGroup || !currentPost) && (
+        <div className="card">
+          <div className="section-title">⚠️ ข้อมูลคิวไม่สมบูรณ์</div>
+          <p className="text-sm text-secondary mb-2">
+            รายการนี้อ้างถึง {currentGroup ? '' : 'กลุ่มที่ถูกลบ '} {currentPost ? '' : 'โพสต์ที่ถูกลบ '}
+            ระบบยังให้ข้ามหรือบันทึกว่าโพสต์ไม่ได้เพื่อเดิน session ต่อได้
+          </p>
+          <div className="flex gap-1" style={{ flexWrap: 'wrap' }}>
+            <button className="btn btn-ghost" onClick={() => updateStatus('skipped')}>ข้ามรายการนี้</button>
+            <button className="btn btn-danger" onClick={() => updateStatus('failed')}>บันทึกว่าโพสต์ไม่ได้</button>
+          </div>
+        </div>
+      )}
+
       {/* Summary Modal */}
       <Modal isOpen={showSummary} onClose={() => setShowSummary(false)} title="🎉 แชร์โพสต์เสร็จแล้ว!" size="lg"
         footer={
@@ -293,6 +347,34 @@ export function ShareSession() {
         <div className="disclaimer-banner" style={{ marginTop: '1rem', marginBottom: 0 }}>
           <span className="disclaimer-icon">🛡️</span>
           <span>Session เสร็จสิ้น ตรวจสอบ Pending Approval เพื่อติดตามผลอนุมัติ</span>
+        </div>
+      </Modal>
+
+      <Modal isOpen={showLeadForm} onClose={() => setShowLeadForm(false)} title="บันทึก Lead" size="lg"
+        footer={
+          <>
+            <button className="btn btn-ghost" onClick={() => setShowLeadForm(false)}>ยกเลิก</button>
+            <button className="btn btn-primary" onClick={saveLeadAndAdvance}>บันทึก Lead และไปต่อ</button>
+          </>
+        }
+      >
+        <div className="form-row">
+          <div className="form-group">
+            <label className="form-label">ชื่อลูกค้า / โปรไฟล์</label>
+            <input className="form-input" value={leadForm.customerName} onChange={(e) => setLeadForm({ ...leadForm, customerName: e.target.value })} placeholder="เช่น คุณเอ, FB profile, เพจร้าน..." />
+          </div>
+          <div className="form-group">
+            <label className="form-label">บริการที่สนใจ</label>
+            <input className="form-input" value={leadForm.serviceInterest} onChange={(e) => setLeadForm({ ...leadForm, serviceInterest: e.target.value })} placeholder="เช่น ไลฟ์สด, ถ่ายภาพ, โปรโมทเว็บ..." />
+          </div>
+        </div>
+        <div className="form-group">
+          <label className="form-label">รายละเอียดการติดต่อ</label>
+          <textarea className="form-textarea" rows={3} value={leadForm.contactNote} onChange={(e) => setLeadForm({ ...leadForm, contactNote: e.target.value })} placeholder="สรุปว่าลูกค้าทักเรื่องอะไร ต้อง follow-up อะไรต่อ..." />
+        </div>
+        <div className="form-group">
+          <label className="form-label">มูลค่าประเมิน</label>
+          <input className="form-input" value={leadForm.valueEstimate} onChange={(e) => setLeadForm({ ...leadForm, valueEstimate: e.target.value })} placeholder="เช่น 5,000 บาท, ยังไม่ทราบ" />
         </div>
       </Modal>
     </div>

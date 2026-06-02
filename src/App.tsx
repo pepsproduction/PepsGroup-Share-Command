@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
 import './styles/global.css';
 import type { AppPage } from './types';
-import { settingsStorage } from './lib/storage';
+import { campaignStorage, groupStorage, leadStorage, queueStorage, settingsStorage } from './lib/storage';
 import { loadSeedData } from './lib/seedData';
+import { BACKUP_MARKER_KEY, collectAutomationReminders, reminderRunKey } from './lib/automation';
 
 import { NotificationProvider } from './components/NotificationCenter';
+import { useNotifications } from './components/NotificationContexts';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 
@@ -24,6 +26,7 @@ import { Settings } from './pages/Settings';
 loadSeedData();
 
 function AppContent() {
+  const { addNotification } = useNotifications();
   const [currentPage, setCurrentPage] = useState<AppPage>('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -32,6 +35,38 @@ function AppContent() {
     const settings = settingsStorage.get();
     document.documentElement.setAttribute('data-theme', settings.theme);
   }, []);
+
+  useEffect(() => {
+    const settings = settingsStorage.get();
+    const runKey = reminderRunKey();
+    if (localStorage.getItem(runKey)) return;
+
+    const reminders = collectAutomationReminders({
+      queue: queueStorage.getAll(),
+      groups: groupStorage.getAll(),
+      campaigns: campaignStorage.getAll(),
+      leads: leadStorage.getAll(),
+      settings,
+      lastBackupAt: localStorage.getItem(BACKUP_MARKER_KEY),
+    });
+    if (reminders.length === 0) return;
+
+    localStorage.setItem(runKey, '1');
+    const timer = window.setTimeout(() => {
+      reminders.forEach((reminder) => {
+        addNotification(reminder.severity, reminder.title, reminder.message);
+        if (
+          settings.automation.browserNotificationsEnabled &&
+          'Notification' in window &&
+          Notification.permission === 'granted'
+        ) {
+          new Notification(reminder.title, { body: reminder.message });
+        }
+      });
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [addNotification]);
 
   // Close sidebar on mobile when page changes
   function handleNavigate(page: AppPage) {

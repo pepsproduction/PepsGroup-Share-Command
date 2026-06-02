@@ -1,11 +1,12 @@
 import { useState, useCallback } from 'react';
 import type { Campaign, CampaignStatus, CampaignObjective } from '../types';
-import { campaignStorage, postStorage, groupStorage, queueStorage } from '../lib/storage';
-import { useNotifications } from '../components/NotificationCenter';
+import { campaignStorage, postStorage, groupStorage, queueStorage, settingsStorage } from '../lib/storage';
+import { useNotifications } from '../components/NotificationContexts';
 import { CampaignStatusBadge } from '../components/Badge';
 import { ConfirmModal, Modal } from '../components/Modal';
 import { formatDate, isoNow } from '../lib/date';
-import type { ShareQueueItem } from '../types';
+import { createId } from '../lib/ids';
+import { createQueueItemsFromPlan, planSmartQueue, summarizeSkipped } from '../lib/automation';
 
 const OBJECTIVE_LABELS: Record<CampaignObjective, string> = {
   promote_live_sport: '⚽ โปรโมทไลฟ์กีฬา',
@@ -50,33 +51,44 @@ export function CampaignBuilder() {
   function handleCreate() {
     if (!validate()) return;
     const now = isoNow();
+    const campaignId = createId('camp');
+    const post = postStorage.getById(form.postId);
+    const queuePlan = planSmartQueue({
+      campaignId,
+      selectedGroupIds: form.selectedGroupIds,
+      groups,
+      existingQueue: queueStorage.getAll(),
+      post,
+      settings: settingsStorage.get().automation,
+    });
+
+    if (queuePlan.eligibleGroups.length === 0) {
+      setErrors({ groups: 'ไม่มีสักกลุ่มที่ผ่านเงื่อนไข Smart Queue' });
+      addNotification('warning', 'Smart Queue ไม่พบกลุ่มที่พร้อม', summarizeSkipped(queuePlan.skipped) || 'ตรวจสอบ cooldown, blacklist หรือกฎห้ามลิงก์');
+      return;
+    }
+
     const campaign: Campaign = {
-      id: `camp_${Date.now()}`,
+      id: campaignId,
       ...form,
+      selectedGroupIds: queuePlan.eligibleGroups.map((group) => group.id),
       scheduledAt: form.scheduledAt || null,
       createdAt: now,
       updatedAt: now,
     };
     campaignStorage.add(campaign);
 
-    // Create queue items
-    const qItems: ShareQueueItem[] = form.selectedGroupIds.map((groupId) => ({
-      id: `qi_${Date.now()}_${groupId}`,
+    const qItems = createQueueItemsFromPlan({
+      plan: queuePlan,
       campaignId: campaign.id,
       postId: form.postId,
-      groupId,
       scheduledAt: form.scheduledAt || null,
-      status: 'not_started',
-      submittedAt: null,
-      approvedAt: null,
-      rejectedAt: null,
-      note: '',
-      createdAt: now,
-      updatedAt: now,
-    }));
+      now,
+    });
     queueStorage.addMany(qItems);
 
-    addNotification('success', 'สร้างแคมเปญสำเร็จ', `"${campaign.name}" พร้อมแล้ว ${qItems.length} กลุ่ม`);
+    const skippedText = queuePlan.skipped.length > 0 ? ` ข้าม ${queuePlan.skipped.length} กลุ่ม: ${summarizeSkipped(queuePlan.skipped)}` : '';
+    addNotification('success', 'สร้างแคมเปญสำเร็จ', `"${campaign.name}" พร้อมแล้ว ${qItems.length} กลุ่ม${skippedText}`);
     setForm({ ...DEFAULT_FORM });
     setShowForm(false);
     reload();
@@ -214,6 +226,7 @@ export function CampaignBuilder() {
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
             <button className="btn btn-ghost btn-sm" onClick={() => setForm({ ...form, selectedGroupIds: groups.map((g) => g.id) })}>เลือกทั้งหมด</button>
             <button className="btn btn-ghost btn-sm" onClick={() => setForm({ ...form, selectedGroupIds: groups.filter((g) => g.qualityScore === 'A' || g.qualityScore === 'B').map((g) => g.id) })}>A+B เท่านั้น</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setForm({ ...form, selectedGroupIds: groups.filter((g) => !g.isBlacklisted && g.allowLinks && (g.qualityScore === 'A' || g.qualityScore === 'B')).map((g) => g.id) })}>Smart พร้อมแชร์</button>
             <button className="btn btn-ghost btn-sm" onClick={() => setForm({ ...form, selectedGroupIds: [] })}>ล้างทั้งหมด</button>
           </div>
           <div style={{ maxHeight: '220px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>

@@ -1,14 +1,16 @@
 import { useState } from 'react';
 import type { Campaign } from '../types';
-import { campaignStorage, queueStorage } from '../lib/storage';
-import { useNotifications } from '../components/NotificationCenter';
+import { campaignStorage, queueStorage, leadStorage, groupStorage } from '../lib/storage';
+import { useNotifications } from '../components/NotificationContexts';
 import { formatDate } from '../lib/date';
-import { exportQueueCsv, downloadFile, downloadJson } from '../lib/exporters';
+import { exportLeadsCsv, exportQueueCsv, downloadFile, downloadJson } from '../lib/exporters';
 import { computeSessionSummary, summaryToText } from '../lib/summary';
 
 export function Reports() {
   const { addNotification } = useNotifications();
   const [campaigns] = useState<Campaign[]>(() => campaignStorage.getAll());
+  const [groups] = useState(() => groupStorage.getAll());
+  const [leads] = useState(() => leadStorage.getAll());
 
 
   const reportRows = campaigns.map((c) => {
@@ -31,6 +33,12 @@ export function Reports() {
   function copySummary(row: typeof reportRows[0]) {
     const text = summaryToText(row.summary, row.campaign.name);
     navigator.clipboard.writeText(text).then(() => addNotification('success', 'คัดลอกสรุปแล้ว', ''));
+  }
+
+  function handleExportLeadsCsv() {
+    const csv = exportLeadsCsv(leads, groups, campaigns);
+    downloadFile(csv, `leads-${new Date().toISOString().slice(0, 10)}.csv`);
+    addNotification('success', 'Export Leads CSV สำเร็จ', `${leads.length} รายการ`);
   }
 
   // Overall stats
@@ -67,6 +75,7 @@ export function Reports() {
             <div className="stat-card"><div className="stat-card-label">อนุมัติแล้ว</div><div className="stat-card-value" style={{ color: 'var(--status-done)' }}>{overall.approved}</div></div>
             <div className="stat-card"><div className="stat-card-label">ข้าม</div><div className="stat-card-value" style={{ color: 'var(--status-skipped)' }}>{overall.skipped}</div></div>
             <div className="stat-card"><div className="stat-card-label">ลูกค้าทัก</div><div className="stat-card-value" style={{ color: 'var(--gold-text)' }}>{overall.leadReceived}</div></div>
+            <div className="stat-card"><div className="stat-card-label">Lead records</div><div className="stat-card-value" style={{ color: 'var(--gold-text)' }}>{leads.length}</div></div>
           </div>
 
           {/* Bar Chart */}
@@ -80,6 +89,56 @@ export function Reports() {
               </div>
             ))}
           </div>
+        </div>
+      </div>
+
+      {/* Lead Pipeline */}
+      <div className="section">
+        <div className="section-title">💬 Lead Pipeline</div>
+        <div className="card">
+          <div className="flex items-center justify-between mb-2" style={{ flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div>
+              <div className="font-bold text-sm">Lead ทั้งหมด {leads.length} รายการ</div>
+              <div className="text-xs text-muted">สร้างจากปุ่ม “มีลูกค้าทัก” ใน Share Session</div>
+            </div>
+            <button className="btn btn-secondary btn-sm" onClick={handleExportLeadsCsv}>📊 Export Leads CSV</button>
+          </div>
+          {leads.length === 0 ? (
+            <div className="empty-state" style={{ padding: '1.5rem' }}>
+              <div className="empty-state-icon">💬</div>
+              <div className="empty-state-desc">ยังไม่มี lead ที่บันทึกไว้</div>
+            </div>
+          ) : (
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>ลูกค้า</th>
+                    <th>แคมเปญ</th>
+                    <th>กลุ่ม</th>
+                    <th>บริการ</th>
+                    <th>มูลค่า</th>
+                    <th>สถานะ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {leads.map((lead) => (
+                    <tr key={lead.id}>
+                      <td>
+                        <div className="font-bold text-sm">{lead.customerName}</div>
+                        <div className="text-xs text-muted">{lead.contactNote}</div>
+                      </td>
+                      <td>{campaigns.find((c) => c.id === lead.campaignId)?.name || lead.campaignId}</td>
+                      <td>{groups.find((g) => g.id === lead.groupId)?.name || lead.groupId}</td>
+                      <td>{lead.serviceInterest || '-'}</td>
+                      <td>{lead.valueEstimate || '-'}</td>
+                      <td><span className="badge badge-gold">{lead.status}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
 
@@ -149,7 +208,7 @@ export function Reports() {
                         <span>{((s.posted + s.approved + s.skipped + s.failed + s.leadReceived) / s.total * 100).toFixed(0)}%</span>
                       </div>
                       <div className="progress-bar">
-                        <div className="progress-fill" style={{ width: `${((s.posted + s.approved + s.skipped + s.failed) / s.total * 100)}%` }} />
+                        <div className="progress-fill" style={{ width: `${((s.posted + s.approved + s.skipped + s.failed + s.leadReceived) / s.total * 100)}%` }} />
                       </div>
                     </div>
                   )}

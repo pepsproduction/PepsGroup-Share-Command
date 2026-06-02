@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import type { Group, QualityScore } from '../types';
 import { groupStorage } from '../lib/storage';
 import { openInNewTab, isFbGroupUrl, normalizeFbGroupUrl } from '../lib/facebook';
-import { useNotifications } from '../components/NotificationCenter';
+import { useNotifications } from '../components/NotificationContexts';
 import { GroupStatusBadge, QualityBadge, LinkBadge } from '../components/Badge';
 import { ConfirmModal, Modal } from '../components/Modal';
 import { daysSince, formatDate, isoNow } from '../lib/date';
@@ -41,8 +41,8 @@ export function GroupLibrary() {
   });
 
   function handleDelete(id: string) {
-    groupStorage.delete(id);
-    addNotification('success', 'ลบกลุ่มสำเร็จ', 'ลบกลุ่มออกจากไลบรารีแล้ว');
+    groupStorage.deleteWithRelations(id);
+    addNotification('success', 'ลบกลุ่มสำเร็จ', 'ลบกลุ่มและข้อมูลคิวที่เกี่ยวข้องแล้ว');
     reload();
   }
 

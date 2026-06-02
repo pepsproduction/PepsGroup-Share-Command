@@ -7,6 +7,7 @@ import type {
   Lead,
   AppSettings,
 } from '../types';
+import { DEFAULT_AUTOMATION_SETTINGS } from './automation';
 
 // =====================================================
 // STORAGE KEYS
@@ -19,6 +20,7 @@ const KEYS = {
   notifications: 'pgsc_notifications',
   leads: 'pgsc_leads',
   settings: 'pgsc_settings',
+  seeded: 'pgsc_seeded_v1',
 };
 
 // =====================================================
@@ -71,6 +73,12 @@ export const groupStorage = {
     const groups = groupStorage.getAll().filter((g) => g.id !== id);
     groupStorage.save(groups);
   },
+  deleteWithRelations: (id: string): void => {
+    groupStorage.delete(id);
+    queueStorage.deleteByGroup(id);
+    campaignStorage.removeGroupFromAll(id);
+    leadStorage.deleteByGroup(id);
+  },
   findByUrl: (url: string): Group | undefined => {
     return groupStorage.getAll().find((g) => g.url.trim().toLowerCase() === url.trim().toLowerCase());
   },
@@ -95,6 +103,16 @@ export const postStorage = {
     const posts = postStorage.getAll().filter((p) => p.id !== id);
     postStorage.save(posts);
   },
+  deleteWithRelations: (id: string): void => {
+    const campaignIds = campaignStorage.getAll().filter((c) => c.postId === id).map((c) => c.id);
+    postStorage.delete(id);
+    queueStorage.deleteByPost(id);
+    campaignIds.forEach((campaignId) => {
+      campaignStorage.delete(campaignId);
+      queueStorage.deleteByCampaign(campaignId);
+      leadStorage.deleteByCampaign(campaignId);
+    });
+  },
   getById: (id: string): CaptionPost | undefined => {
     return postStorage.getAll().find((p) => p.id === id);
   },
@@ -117,6 +135,13 @@ export const campaignStorage = {
   },
   delete: (id: string): void => {
     const campaigns = campaignStorage.getAll().filter((c) => c.id !== id);
+    campaignStorage.save(campaigns);
+  },
+  removeGroupFromAll: (groupId: string): void => {
+    const campaigns = campaignStorage.getAll().map((campaign) => ({
+      ...campaign,
+      selectedGroupIds: campaign.selectedGroupIds.filter((id) => id !== groupId),
+    }));
     campaignStorage.save(campaigns);
   },
   getById: (id: string): Campaign | undefined => {
@@ -150,6 +175,14 @@ export const queueStorage = {
   },
   deleteByCampaign: (campaignId: string): void => {
     const items = queueStorage.getAll().filter((q) => q.campaignId !== campaignId);
+    queueStorage.save(items);
+  },
+  deleteByGroup: (groupId: string): void => {
+    const items = queueStorage.getAll().filter((q) => q.groupId !== groupId);
+    queueStorage.save(items);
+  },
+  deleteByPost: (postId: string): void => {
+    const items = queueStorage.getAll().filter((q) => q.postId !== postId);
     queueStorage.save(items);
   },
   getByCampaign: (campaignId: string): ShareQueueItem[] => {
@@ -196,6 +229,14 @@ export const leadStorage = {
     const leads = leadStorage.getAll().map((l) => (l.id === lead.id ? lead : l));
     leadStorage.save(leads);
   },
+  deleteByGroup: (groupId: string): void => {
+    const leads = leadStorage.getAll().filter((l) => l.groupId !== groupId);
+    leadStorage.save(leads);
+  },
+  deleteByCampaign: (campaignId: string): void => {
+    const leads = leadStorage.getAll().filter((l) => l.campaignId !== campaignId);
+    leadStorage.save(leads);
+  },
 };
 
 // =====================================================
@@ -215,10 +256,27 @@ const DEFAULT_SETTINGS: AppSettings = {
     photographer: '📸 {title}\n\n{caption}\n\n📞 ติดต่อ/ดูพอร์ต: {link}\n\n{hashtags}',
     local_community: '📢 {title}\n\n{caption}\n\n{link}\n\n{hashtags}',
   },
+  automation: DEFAULT_AUTOMATION_SETTINGS,
 };
 
+function normalizeSettings(settings: Partial<AppSettings>): AppSettings {
+  return {
+    ...DEFAULT_SETTINGS,
+    ...settings,
+    categories: Array.isArray(settings.categories) ? settings.categories : DEFAULT_SETTINGS.categories,
+    captionTemplates: {
+      ...DEFAULT_SETTINGS.captionTemplates,
+      ...(settings.captionTemplates || {}),
+    },
+    automation: {
+      ...DEFAULT_AUTOMATION_SETTINGS,
+      ...(settings.automation || {}),
+    },
+  };
+}
+
 export const settingsStorage = {
-  get: (): AppSettings => getObjectItem<AppSettings>(KEYS.settings, DEFAULT_SETTINGS),
+  get: (): AppSettings => normalizeSettings(getObjectItem<Partial<AppSettings>>(KEYS.settings, DEFAULT_SETTINGS)),
   save: (settings: AppSettings): void => setObjectItem(KEYS.settings, settings),
 };
 
@@ -232,6 +290,7 @@ export interface AppDataExport {
   posts: CaptionPost[];
   campaigns: Campaign[];
   queue: ShareQueueItem[];
+  notifications: NotificationItem[];
   leads: Lead[];
   settings: AppSettings;
 }
@@ -244,20 +303,44 @@ export function exportAllData(): AppDataExport {
     posts: postStorage.getAll(),
     campaigns: campaignStorage.getAll(),
     queue: queueStorage.getAll(),
+    notifications: notificationStorage.getAll(),
     leads: leadStorage.getAll(),
     settings: settingsStorage.get(),
   };
 }
 
-export function importAllData(data: AppDataExport): void {
-  if (data.groups) groupStorage.save(data.groups);
-  if (data.posts) postStorage.save(data.posts);
-  if (data.campaigns) campaignStorage.save(data.campaigns);
-  if (data.queue) queueStorage.save(data.queue);
-  if (data.leads) leadStorage.save(data.leads);
-  if (data.settings) settingsStorage.save(data.settings);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function optionalArray(data: Record<string, unknown>, key: string): unknown[] | undefined {
+  if (!(key in data)) return undefined;
+  if (!Array.isArray(data[key])) throw new Error(`${key} must be an array`);
+  return data[key];
+}
+
+export function importAllData(data: unknown): void {
+  if (!isRecord(data)) throw new Error('Import data must be an object');
+
+  const groups = optionalArray(data, 'groups') as Group[] | undefined;
+  const posts = optionalArray(data, 'posts') as CaptionPost[] | undefined;
+  const campaigns = optionalArray(data, 'campaigns') as Campaign[] | undefined;
+  const queue = optionalArray(data, 'queue') as ShareQueueItem[] | undefined;
+  const notifications = optionalArray(data, 'notifications') as NotificationItem[] | undefined;
+  const leads = optionalArray(data, 'leads') as Lead[] | undefined;
+
+  if (groups) groupStorage.save(groups);
+  if (posts) postStorage.save(posts);
+  if (campaigns) campaignStorage.save(campaigns);
+  if (queue) queueStorage.save(queue);
+  if (notifications) notificationStorage.save(notifications);
+  if (leads) leadStorage.save(leads);
+  if (isRecord(data.settings)) settingsStorage.save(normalizeSettings(data.settings));
 }
 
 export function clearAllData(): void {
   Object.values(KEYS).forEach((key) => localStorage.removeItem(key));
+  Object.keys(localStorage)
+    .filter((key) => key.startsWith('pgsc_'))
+    .forEach((key) => localStorage.removeItem(key));
 }
