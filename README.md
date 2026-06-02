@@ -157,8 +157,9 @@ src/
 - ✅ เว็บนี้ **ไม่** auto-post ลง Facebook
 - ✅ เว็บนี้ **ไม่** ใช้ Facebook token หรือ API
 - ✅ เว็บนี้ **ไม่** scrape Facebook
-- ✅ เว็บนี้ **ไม่** auto-click
-- ✅ เว็บนี้เป็นเพียง **Manual Share Planner** เท่านั้น
+- ✅ เว็บหลัก **ไม่** auto-click บน Facebook เอง
+- ✅ ถ้าติดตั้ง `public/pgsc-facebook-helper` ระบบจะช่วยคลิกช่องเขียนโพสต์และวางแคปชั่นให้ แต่ **ไม่** กดโพสต์
+- ✅ เว็บนี้เป็น **Manual Share Planner** ที่ผู้ใช้ยังต้องตรวจและกดโพสต์เอง
 - ✅ ข้อมูลทั้งหมดอยู่ใน Browser ของคุณ ไม่มีเซิร์ฟเวอร์
 
 ---

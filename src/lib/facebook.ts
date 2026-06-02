@@ -4,8 +4,16 @@
 
 let rememberedFbTab: Window | null = null;
 
-const FB_SHARE_TAB_STORAGE_KEY = 'pgsc_fb_share_tab_name';
 const DEFAULT_FB_SHARE_TAB_NAME = 'pgsc_fb_share_tab';
+const SHARE_COMMAND_SOURCE = 'PGSC_SHARE_COMMAND';
+const HELPER_COMMAND_TYPE = 'QUEUE_CAPTION';
+const HELPER_PASTE_TYPE = 'PASTE_CAPTION';
+const HELPER_ACK_TYPE = 'HELPER_ACK';
+const HELPER_READY_TYPE = 'HELPER_READY';
+const HELPER_PING_TYPE = 'PING_HELPER';
+const HELPER_ACK_TIMEOUT_MS = 350;
+const HELPER_AVAILABLE_STORAGE_KEY = 'pgsc_fb_helper_available_until';
+const HELPER_AVAILABLE_TTL_MS = 5 * 60 * 1000;
 const GROUP_ID_PATTERN = /(?:facebook\.com)?\/groups\/([a-zA-Z0-9._-]+)/i;
 const GROUP_URL_PATTERN = /(?:https?:\/\/(?:www\.)?facebook\.com)?\/groups\/([a-zA-Z0-9._-]+)/i;
 const MEMBER_COUNT_PATTERN = /(?:สมาชิก|members?)\s*([^\n]+)/i;
@@ -16,15 +24,66 @@ interface ImportedGroupLike {
   memberCount?: unknown;
 }
 
-function getShareTabName(targetName: string): string {
+interface FacebookHelperCommand {
+  source: typeof SHARE_COMMAND_SOURCE;
+  type: typeof HELPER_COMMAND_TYPE | typeof HELPER_PASTE_TYPE;
+  requestId: string;
+  groupUrl: string;
+  caption: string;
+  createdAt: number;
+  openMode: 'helper' | 'already-opened';
+}
+
+interface FacebookHelperAck {
+  source: typeof SHARE_COMMAND_SOURCE;
+  type: typeof HELPER_ACK_TYPE;
+  requestId: string;
+  handled: boolean;
+}
+
+interface FacebookHelperReady {
+  source: typeof SHARE_COMMAND_SOURCE;
+  type: typeof HELPER_READY_TYPE;
+}
+
+function markFacebookHelperAvailable(): void {
   try {
-    const saved = sessionStorage.getItem(FB_SHARE_TAB_STORAGE_KEY);
-    if (saved) return saved;
-    sessionStorage.setItem(FB_SHARE_TAB_STORAGE_KEY, targetName);
+    sessionStorage.setItem(HELPER_AVAILABLE_STORAGE_KEY, String(Date.now() + HELPER_AVAILABLE_TTL_MS));
   } catch {
     // Session storage can be unavailable in restricted browser modes.
   }
-  return targetName;
+}
+
+function isFacebookHelperAvailable(): boolean {
+  try {
+    return Number(sessionStorage.getItem(HELPER_AVAILABLE_STORAGE_KEY) || 0) > Date.now();
+  } catch {
+    return false;
+  }
+}
+
+function isFacebookHelperReady(data: unknown): data is FacebookHelperReady {
+  if (!data || typeof data !== 'object') return false;
+  const ready = data as Partial<FacebookHelperReady>;
+  return ready.source === SHARE_COMMAND_SOURCE && ready.type === HELPER_READY_TYPE;
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('message', (event) => {
+    if (event.source !== window || event.origin !== window.location.origin) return;
+    if (isFacebookHelperReady(event.data)) markFacebookHelperAvailable();
+  });
+
+  window.setTimeout(() => {
+    window.postMessage(
+      {
+        source: SHARE_COMMAND_SOURCE,
+        type: HELPER_PING_TYPE,
+        requestId: `pgsc_probe_${Date.now()}`,
+      },
+      window.location.origin
+    );
+  }, 0);
 }
 
 function extractMemberCount(text: string): string {
@@ -100,26 +159,147 @@ export function openInNewTab(url: string, targetName: string = 'fb_share_tab'): 
  * This keeps a WindowProxy when possible and also uses a stable target name,
  * so later clicks navigate the existing Facebook tab instead of spawning more tabs.
  */
-export function openInReusableTab(url: string, targetName: string = DEFAULT_FB_SHARE_TAB_NAME): void {
+export function openInReusableTab(url: string, targetName: string = DEFAULT_FB_SHARE_TAB_NAME): Window | null {
   const normalized = isFbGroupUrl(url) ? normalizeFbGroupUrl(url) : url;
-  const reusableTarget = getShareTabName(targetName);
 
   try {
-    if (!rememberedFbTab || rememberedFbTab.closed) {
-      rememberedFbTab = window.open('', reusableTarget);
-    }
-
-    if (rememberedFbTab) {
+    if (rememberedFbTab && !rememberedFbTab.closed) {
       rememberedFbTab.location.href = normalized;
       rememberedFbTab.focus();
-      return;
+      return rememberedFbTab;
     }
   } catch {
     rememberedFbTab = null;
   }
 
-  rememberedFbTab = window.open(normalized, reusableTarget);
+  rememberedFbTab = window.open(normalized, targetName);
   rememberedFbTab?.focus();
+  return rememberedFbTab;
+}
+
+function buildFacebookHelperCommand(
+  caption: string,
+  groupUrl: string,
+  openMode: FacebookHelperCommand['openMode']
+): FacebookHelperCommand {
+  const normalizedGroupUrl = isFbGroupUrl(groupUrl) ? normalizeFbGroupUrl(groupUrl) : groupUrl;
+  const requestId = `pgsc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  return {
+    source: SHARE_COMMAND_SOURCE,
+    type: HELPER_COMMAND_TYPE,
+    requestId,
+    groupUrl: normalizedGroupUrl,
+    caption,
+    createdAt: Date.now(),
+    openMode,
+  };
+}
+
+function pingRememberedFacebookTab(command: FacebookHelperCommand): void {
+  try {
+    if (!rememberedFbTab || rememberedFbTab.closed) return;
+  } catch {
+    return;
+  }
+
+  let targetOrigin = '';
+  try {
+    targetOrigin = new URL(command.groupUrl).origin;
+  } catch {
+    return;
+  }
+  const payload: FacebookHelperCommand = {
+    ...command,
+    type: HELPER_PASTE_TYPE,
+  };
+
+  let attempts = 0;
+  const timer = window.setInterval(() => {
+    attempts += 1;
+    try {
+      rememberedFbTab?.postMessage(payload, targetOrigin);
+    } catch {
+      window.clearInterval(timer);
+      return;
+    }
+    if (attempts >= 18) window.clearInterval(timer);
+  }, 700);
+}
+
+function isFacebookHelperAck(data: unknown, requestId: string): data is FacebookHelperAck {
+  if (!data || typeof data !== 'object') return false;
+  const ack = data as Partial<FacebookHelperAck>;
+
+  return (
+    ack.source === SHARE_COMMAND_SOURCE &&
+    ack.type === HELPER_ACK_TYPE &&
+    ack.requestId === requestId &&
+    typeof ack.handled === 'boolean'
+  );
+}
+
+function queueCaptionCommand(command: FacebookHelperCommand): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer = 0;
+
+    const finish = (handled: boolean) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      window.removeEventListener('message', handleAck);
+      resolve(handled);
+    };
+
+    const handleAck = (event: MessageEvent) => {
+      if (event.source !== window || event.origin !== window.location.origin) return;
+      if (isFacebookHelperAck(event.data, command.requestId)) {
+        if (event.data.handled) markFacebookHelperAvailable();
+        finish(event.data.handled);
+      }
+    };
+
+    timer = window.setTimeout(() => finish(false), HELPER_ACK_TIMEOUT_MS);
+    window.addEventListener('message', handleAck);
+    window.postMessage(command, window.location.origin);
+  });
+}
+
+/**
+ * Open the group and queue a caption for the optional PGSC Facebook Helper extension.
+ * When the helper is installed it reuses a real browser tab id. Without the helper,
+ * the app falls back to a named Window target and clipboard copy.
+ */
+export async function openGroupAndSendCaptionToHelper(
+  caption: string,
+  groupUrl: string,
+  targetName: string = DEFAULT_FB_SHARE_TAB_NAME
+): Promise<{ opened: boolean; openedByHelper: boolean }> {
+  const helperReady = isFacebookHelperAvailable();
+  const command = buildFacebookHelperCommand(caption, groupUrl, helperReady ? 'helper' : 'already-opened');
+  let openedByWindow = false;
+
+  if (!helperReady) {
+    const tab = openInReusableTab(groupUrl, targetName);
+    openedByWindow = Boolean(tab);
+    if (tab) pingRememberedFacebookTab(command);
+  }
+
+  const openedByHelper = await queueCaptionCommand(command);
+
+  if (helperReady && openedByHelper) {
+    return { opened: true, openedByHelper: true };
+  }
+
+  if (!helperReady) {
+    return { opened: openedByWindow || openedByHelper, openedByHelper: false };
+  }
+
+  const tab = openInReusableTab(groupUrl, targetName);
+  if (tab) pingRememberedFacebookTab(command);
+
+  return { opened: Boolean(tab), openedByHelper: false };
 }
 
 /**

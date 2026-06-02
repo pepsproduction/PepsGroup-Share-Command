@@ -4,7 +4,7 @@ import { queueStorage, campaignStorage, groupStorage, postStorage, leadStorage }
 import { useNotifications } from '../components/NotificationContexts';
 import { ShareStatusBadge, GroupStatusBadge } from '../components/Badge';
 import { Modal } from '../components/Modal';
-import { openInReusableTab } from '../lib/facebook';
+import { openGroupAndSendCaptionToHelper } from '../lib/facebook';
 import { computeSessionSummary, summaryToText } from '../lib/summary';
 import { isoNow } from '../lib/date';
 import { exportQueueCsv, downloadFile, downloadJson } from '../lib/exporters';
@@ -17,6 +17,32 @@ const DEFAULT_LEAD_FORM = {
   serviceInterest: '',
   valueEstimate: '',
 };
+
+function copyTextToClipboard(text: string): Promise<void> {
+  const fallbackCopy = () => {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', 'true');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    textarea.style.top = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+
+    const copied = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return copied;
+  };
+
+  if (fallbackCopy()) {
+    navigator.clipboard?.writeText(text).catch(() => undefined);
+    return Promise.resolve();
+  }
+
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
+  return Promise.reject(new Error('Copy failed'));
+}
 
 export function ShareSession() {
   const { addNotification } = useNotifications();
@@ -117,20 +143,28 @@ export function ShareSession() {
 
   function copyCaption() {
     if (!currentCaption) return;
-    navigator.clipboard.writeText(currentCaption).then(() => addNotification('success', 'คัดลอก Caption สำเร็จ!', ''));
+    copyTextToClipboard(currentCaption).then(() => addNotification('success', 'คัดลอก Caption สำเร็จ!', ''));
   }
 
-  function handleOpenAndCopy() {
+  async function handleOpenAndCopy() {
     if (!currentCaption || !currentGroup) return;
-    navigator.clipboard.writeText(currentCaption)
+    const copyPromise = copyTextToClipboard(currentCaption);
+    const openResult = await openGroupAndSendCaptionToHelper(currentCaption, currentGroup.url, 'pgsc_share_session_fb_tab');
+
+    copyPromise
       .then(() => {
-        addNotification('success', 'คัดลอก Caption สำเร็จ!', 'เปิดกลุ่มในแท็บ Facebook เดิมแล้ว กด Ctrl+V เพื่อวางและโพสต์');
-        openInReusableTab(currentGroup.url, 'pgsc_share_session_fb_tab');
+        const detail = openResult.openedByHelper
+          ? 'PGSC Helper เปิดกลุ่มในแท็บ Facebook เดิมและจะวางแคปชั่นให้เอง'
+          : 'เปิดกลุ่มในแท็บ Facebook เดิมแล้ว หากติดตั้ง PGSC Helper ระบบจะวางให้เอง';
+        addNotification('success', 'คัดลอก Caption สำเร็จ!', detail);
       })
       .catch((err) => {
-        console.error('Failed to copy caption:', err);
-        addNotification('error', 'คัดลอก Caption ไม่สำเร็จ', 'กรุณากดปุ่มคัดลอก Caption ด้านข้าง');
-        openInReusableTab(currentGroup.url, 'pgsc_share_session_fb_tab');
+        const detail = openResult.openedByHelper
+          ? 'Clipboard ไม่อนุญาต แต่ PGSC Helper จะวางแคปชั่นให้บน Facebook'
+          : openResult.opened
+          ? 'เปิดกลุ่มแล้ว แต่ Clipboard ไม่อนุญาตให้คัดลอกอัตโนมัติ'
+          : 'ไม่สามารถเปิดแท็บ Facebook ได้ กรุณาอนุญาต popup และลองอีกครั้ง';
+        addNotification('warning', 'Clipboard ไม่อนุญาต', detail || String(err));
       });
   }
 
@@ -174,7 +208,7 @@ export function ShareSession() {
   function copySummary() {
     const campaign = campaigns.find((c) => c.id === selectedCampaign);
     const text = summaryToText(summary, campaign?.name);
-    navigator.clipboard.writeText(text).then(() => addNotification('success', 'คัดลอกสรุปแล้ว', ''));
+    copyTextToClipboard(text).then(() => addNotification('success', 'คัดลอกสรุปแล้ว', ''));
   }
 
   // If not active, show setup
