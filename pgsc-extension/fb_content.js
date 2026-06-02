@@ -39,11 +39,8 @@
   }
 
   async function waitForPageReady() {
-    // Wait until a share button exists on the page
-    return waitForElement(
-      '[aria-label="แชร์"],[aria-label="Share"],[data-testid="share"]',
-      10000
-    );
+    // Wait until the main article element is present on the page
+    return waitForElement('[role="article"]', 10000);
   }
 
   // ---------------------
@@ -102,18 +99,11 @@
       RUNNING = false;
 
       if (!isDone) {
-        // Wait for background to send next group command via PGSC_SHARE_NEXT
-        // Background will call chrome.tabs.sendMessage after updating state
-        const delayMs = randomBetween(4000, 9000);
+        const delayMs = randomBetween(5000, 9000);
         log(`Waiting ${Math.round(delayMs / 1000)}s before next group...`);
         setTimeout(() => {
-          // Signal ready for next group
-          chrome.runtime.sendMessage({ type: 'PGSC_FB_READY' }, (res) => {
-            if (chrome.runtime.lastError) return;
-            if (res?.ok && res?.group) {
-              startShare(res.group, res.caption, res.index, res.total);
-            }
-          });
+          // Instruct background page to reload to postUrl to clear state
+          chrome.runtime.sendMessage({ type: 'PGSC_NAVIGATE_POST' });
         }, delayMs);
       } else {
         log('All groups done!');
@@ -162,7 +152,14 @@
 
   async function findShareButton(retries = 3) {
     for (let attempt = 0; attempt < retries; attempt++) {
-      // Try aria-label selectors first (more robust with substring match)
+      // Find the main article container first
+      const article = document.querySelector('[role="article"]');
+      if (!article) {
+        if (attempt < retries - 1) await delay(2000);
+        continue;
+      }
+
+      // Try aria-label selectors first (more robust with substring match) inside the article
       const ariaSelectors = [
         '[aria-label*="แชร์"]', 
         '[aria-label*="share" i]', 
@@ -171,14 +168,14 @@
         '[aria-label="Send"]'
       ];
       for (const sel of ariaSelectors) {
-        const els = document.querySelectorAll(sel);
+        const els = article.querySelectorAll(sel);
         for (const el of els) {
           if (isClickable(el) || el.closest('[role="button"],[tabindex]')) return el;
         }
       }
 
-      // Fallback: find by button/role=button + text that contains share keywords
-      const buttons = document.querySelectorAll('[role="button"],button,div[tabindex="0"]');
+      // Fallback: find by button/role=button + text that contains share keywords inside the article
+      const buttons = article.querySelectorAll('[role="button"],button,div[tabindex="0"]');
       for (const btn of buttons) {
         const text = btn.textContent?.trim() || '';
         const lowerText = text.toLowerCase();
@@ -199,31 +196,31 @@
   // Step 2: Click "กลุ่ม" in share sheet
   // ---------------------
   async function clickGroupsOption() {
-    const dialog = await waitForElement('[role="dialog"],[data-testid="share-sheet"]', 5000);
-    if (!dialog) throw new Error('Share sheet did not appear');
+    // Wait a brief moment for the share menu overlay to render
+    await delay(1000);
 
-    await delay(randomBetween(300, 700));
-
-    // Find the "กลุ่ม" or "Group" option
-    const groupsBtn = findInContainer(dialog, ['กลุ่ม', 'Group'], ['div', 'span', 'a', 'button']);
+    // Search the entire document for "แชร์ไปยังกลุ่ม" or "Share to a group" options.
+    // This is much safer than waiting for a specific dialog selector which changes frequently.
+    const groupsBtn = findInContainer(
+      document, 
+      ['แชร์ไปยังกลุ่ม', 'Share to a group', 'กลุ่ม', 'Group'], 
+      ['div', 'span', 'a', 'button', '[role="menuitem"]']
+    );
+    
     if (!groupsBtn) throw new Error('Groups option not found in share sheet');
 
     simulateClick(groupsBtn);
-    await delay(randomBetween(1200, 2500));
+    await delay(randomBetween(1500, 2500));
   }
 
   // ---------------------
   // Step 3: Search and select group
   // ---------------------
   async function searchAndSelectGroup(groupName) {
-    // Wait for the "แชร์ไปยังกลุ่ม" modal
-    const modal = await waitForElement('[role="dialog"]', 5000);
-    if (!modal) throw new Error('Group search modal did not appear');
-
     await delay(randomBetween(400, 800));
 
-    // Find search input
-    const input = findSearchInput(modal);
+    // Wait for the group search input to appear in the DOM (up to 6 seconds)
+    const input = await waitForElement('input[placeholder*="ค้นหา"],input[placeholder*="search" i]', 6000);
     if (!input) throw new Error('Group search input not found');
 
     // Clear and type group name
@@ -234,13 +231,13 @@
     setNativeValue(input, '');
     await typeIntoInput(input, groupName);
 
-    await delay(randomBetween(1500, 2500));
+    await delay(randomBetween(2000, 3000));
 
-    // Wait for search results and find the group
-    const groupItem = await waitForGroupResult(modal, groupName, 6000);
+    // Find the group result item anywhere in the document
+    const groupItem = await waitForGroupResult(document, groupName, 6000);
     if (!groupItem) throw new Error(`Group "${groupName}" not found in search results`);
 
-    await delay(randomBetween(300, 700));
+    await delay(randomBetween(400, 800));
     simulateClick(groupItem);
     await delay(randomBetween(1500, 2500));
   }

@@ -102,6 +102,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     writeLog(message.text);
     sendResponse({ ok: true });
   }
+
+  if (message.type === 'PGSC_NAVIGATE_POST') {
+    chrome.storage.local.get('pgsc_session').then(({ pgsc_session }) => {
+      if (pgsc_session && pgsc_session.status === 'running') {
+        chrome.tabs.update(sender.tab.id, { url: pgsc_session.postUrl });
+      }
+    });
+    sendResponse({ ok: true });
+    return;
+  }
 });
 
 // ---------------------
