@@ -75,8 +75,21 @@ export function ShareSession() {
 
   // Detect extension on mount
   useEffect(() => {
-    if (isExtensionInstalled()) {
-      pingExtension().then(ok => setExtInstalled(ok));
+    const check = () => {
+      if (isExtensionInstalled()) {
+        pingExtension().then(ok => setExtInstalled(ok));
+        return true;
+      }
+      return false;
+    };
+    if (!check()) {
+      // Retry in case of race condition
+      const t1 = setTimeout(check, 300);
+      const t2 = setTimeout(check, 1000);
+      return () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+      };
     }
   }, []);
 
@@ -459,11 +472,24 @@ export function ShareSession() {
 
   return (
     <div className="page-content">
-      <div className="page-header">
-        <h1 className="page-title">Share Session</h1>
-        <p className="page-subtitle" style={{ color: 'var(--accent-text)' }}>
-          กลุ่มที่ {progress} จาก {queueItems.length}
-        </p>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+        <div>
+          <h1 className="page-title">Share Session</h1>
+          <p className="page-subtitle" style={{ color: 'var(--accent-text)' }}>
+            กลุ่มที่ {progress} จาก {queueItems.length}
+          </p>
+        </div>
+        <button
+          className="btn btn-secondary"
+          style={{ borderColor: 'rgba(239,83,80,0.5)', color: '#ef5350', padding: '0.5rem 1rem', fontSize: '0.875rem', fontWeight: 600 }}
+          onClick={() => {
+            if (confirm('คุณต้องการยกเลิก Share Session นี้หรือไม่?')) {
+              setIsActive(false);
+            }
+          }}
+        >
+          ❌ ยกเลิก Session
+        </button>
       </div>
 
       {/* Progress */}

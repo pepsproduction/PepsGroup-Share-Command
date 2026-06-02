@@ -8,6 +8,16 @@
   'use strict';
 
   // Signal to the web app that the extension is installed
+  // Since content scripts run in an isolated world, we must inject a script tag
+  // to set this variable in the main page's window context.
+  try {
+    const script = document.createElement('script');
+    script.textContent = 'window.__PGSC_EXTENSION_INSTALLED__ = true;';
+    (document.head || document.documentElement).appendChild(script);
+    script.remove();
+  } catch (e) {
+    console.error('PGSC Helper: Failed to inject installation signal', e);
+  }
   window.__PGSC_EXTENSION_INSTALLED__ = true;
 
   // ---------------------
