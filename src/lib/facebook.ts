@@ -113,20 +113,13 @@ export function buildFbGroupSearchUrl(keyword: string): string {
 export function normalizeFbGroupUrl(url: string): string {
   let cleaned = url.trim();
   
-  // Replace mobile subdomains (m.facebook.com, mobile.facebook.com, touch.facebook.com)
-  cleaned = cleaned.replace(/https?:\/\/(?:m|mobile|touch|web)\.facebook\.com/i, 'https://www.facebook.com');
-  
-  // Ensure protocol
+  // Ensure protocol first so we can normalize domain consistently
   if (!cleaned.startsWith('http://') && !cleaned.startsWith('https://')) {
     cleaned = 'https://' + cleaned;
   }
   
-  // Ensure www.
-  if (cleaned.startsWith('https://facebook.com')) {
-    cleaned = cleaned.replace('https://facebook.com', 'https://www.facebook.com');
-  } else if (cleaned.startsWith('http://facebook.com')) {
-    cleaned = cleaned.replace('http://facebook.com', 'https://www.facebook.com');
-  }
+  // Replace mobile subdomains and fb.com domain variations
+  cleaned = cleaned.replace(/https?:\/\/(?:[a-z0-9-]+\.)?(?:facebook|fb)\.com/i, 'https://www.facebook.com');
   
   // Remove query parameters
   const qIdx = cleaned.indexOf('?');
@@ -306,7 +299,7 @@ export async function openGroupAndSendCaptionToHelper(
  * Validate that a string looks like a Facebook Group URL.
  */
 export function isFbGroupUrl(url: string): boolean {
-  return /facebook\.com\/(groups\/[^/]+|g\/[^/]+)/i.test(url);
+  return /(?:facebook|fb)\.com\/(groups\/[^/]+|g\/[^/]+)/i.test(url);
 }
 
 /**
