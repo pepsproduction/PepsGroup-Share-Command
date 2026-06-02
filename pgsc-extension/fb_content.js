@@ -162,23 +162,32 @@
 
   async function findShareButton(retries = 3) {
     for (let attempt = 0; attempt < retries; attempt++) {
-      // Try aria-label selectors first
-      const ariaSelectors = ['[aria-label="แชร์"]', '[aria-label="Share"]'];
+      // Try aria-label selectors first (more robust with substring match)
+      const ariaSelectors = [
+        '[aria-label*="แชร์"]', 
+        '[aria-label*="share" i]', 
+        '[aria-label*="Share" i]',
+        '[aria-label="ส่ง"]',
+        '[aria-label="Send"]'
+      ];
       for (const sel of ariaSelectors) {
         const els = document.querySelectorAll(sel);
         for (const el of els) {
-          // Must be a button-like element
-          if (isClickable(el)) return el;
+          if (isClickable(el) || el.closest('[role="button"],[tabindex]')) return el;
         }
       }
 
-      // Fallback: find by role=button + text that contains share icon text
-      const buttons = document.querySelectorAll('[role="button"]');
+      // Fallback: find by button/role=button + text that contains share keywords
+      const buttons = document.querySelectorAll('[role="button"],button,div[tabindex="0"]');
       for (const btn of buttons) {
         const text = btn.textContent?.trim() || '';
-        if (/^แชร์$|^Share$/.test(text)) return btn;
-        // Also check if it has a share count (like "88 แชร์")
-        if (/\d+\s*(แชร์|Share)$/.test(text)) return btn;
+        const lowerText = text.toLowerCase();
+        if (lowerText === 'แชร์' || lowerText === 'share' || lowerText === 'ส่ง' || lowerText === 'send') return btn;
+        if (lowerText.includes('แชร์') || lowerText.includes('share')) {
+          if (text.length < 25) return btn; // limit length to avoid catching huge text blocks
+        }
+        // Also check if it has a share count (like "88 แชร์" or "88 Shares")
+        if (/\d+\s*(แชร์|share|shares)/i.test(lowerText) && text.length < 25) return btn;
       }
 
       if (attempt < retries - 1) await delay(2000);
@@ -237,12 +246,9 @@
   }
 
   function findSearchInput(container) {
-    // Try placeholder-based selectors
-    const placeholders = ['ค้นหากลุ่ม', 'ค้นหา', 'Search groups', 'Search'];
-    for (const ph of placeholders) {
-      const input = container.querySelector(`input[placeholder*="${ph}"]`);
-      if (input) return input;
-    }
+    // Try placeholder-based selectors using case-insensitive matches
+    const input = container.querySelector('input[placeholder*="ค้นหา"],input[placeholder*="search" i]');
+    if (input) return input;
     // Fallback: first text input in the modal
     return container.querySelector('input[type="text"],input:not([type="hidden"])');
   }
@@ -380,7 +386,8 @@
     const buttons = container.querySelectorAll('[role="button"],button');
     for (const btn of buttons) {
       const text = btn.textContent?.trim() || '';
-      if (/^โพสต์$|^Post$/i.test(text)) return btn;
+      // In the share dialog, it could be โพสต์, Post, แชร์, Share, ส่ง, Send
+      if (/^โพสต์$|^Post$|^แชร์$|^Share$|^ส่ง$|^Send$/i.test(text)) return btn;
     }
     return null;
   }
@@ -389,25 +396,26 @@
   // Step 6: Detect success/failure
   // ---------------------
   async function detectSuccess() {
-    // If dialog closes, it's a success (FB closes dialog on successful submit)
-    const dialogGone = await waitForDialogToClose(5000);
+    // If dialog closes, it's a success (FB closes dialog on successful submit).
+    // Increase to 10 seconds for slow network connections
+    const dialogGone = await waitForDialogToClose(10000);
     if (dialogGone) return; // Success!
 
     // If dialog is still open, check for error messages
     const dialog = document.querySelector('[role="dialog"]');
     if (dialog) {
       const text = dialog.textContent || '';
-      if (text.includes('รอแอดมิน') || text.includes('pending approval')) {
+      if (text.includes('รอแอดมิน') || text.includes('pending approval') || text.includes('approval') || text.includes('อนุมัติ')) {
         throw new Error('pending_admin');
       }
       // Check if Post button is still there (post might have failed)
       const postBtn = findPostButton(dialog);
       if (postBtn) {
-        throw new Error('Post may have failed (dialog still open)');
+        throw new Error('Post failed (post dialog is still open after 10s)');
       }
     }
 
-    // Assume success if we reach here
+    // Assume success if we reach here (e.g. dialog might be closing or closed)
   }
 
   async function waitForDialogToClose(timeout) {
@@ -456,7 +464,18 @@
       const els = container.querySelectorAll(tag);
       for (const el of els) {
         const text = el.textContent?.trim() || '';
-        if (texts.some(t => text === t || text.startsWith(t + '\n') || text.endsWith('\n' + t))) {
+        const normalizedText = text.toLowerCase();
+        
+        // Match if text exactly equals, starts with, ends with, or contains any of the target texts (case-insensitive)
+        const isMatched = texts.some(t => {
+          const lowerT = t.toLowerCase();
+          return normalizedText === lowerT || 
+                 normalizedText.includes(lowerT) || 
+                 normalizedText.startsWith(lowerT + '\n') || 
+                 normalizedText.endsWith('\n' + lowerT);
+        });
+
+        if (isMatched) {
           if (isClickable(el) || el.closest('[role="button"],[tabindex]')) return el;
         }
       }

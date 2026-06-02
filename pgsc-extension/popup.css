@@ -6,8 +6,11 @@ body {
   font-family: 'Segoe UI', Arial, sans-serif;
   background: #1a1a2e;
   color: #e0e0e0;
-  width: 280px;
-  min-height: 160px;
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .header {
@@ -139,3 +142,40 @@ body {
 }
 
 .footer a:hover { text-decoration: underline; }
+
+.flex-grow {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0; /* Important for scrollable child */
+}
+
+.logs-box {
+  flex: 1;
+  background: #0f0f1b;
+  border: 1px solid #2a2a40;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #a8ffb2; /* Retro green terminal vibe */
+  overflow-y: auto;
+  min-height: 120px;
+}
+
+.log-item {
+  margin-bottom: 4px;
+  border-bottom: 1px dashed rgba(255,255,255,0.03);
+  padding-bottom: 2px;
+  word-break: break-word;
+}
+
+.log-item.error {
+  color: #ff6b6b;
+}
+
+.log-item.info {
+  color: #6be0ff;
+}
+

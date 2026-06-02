@@ -1,4 +1,4 @@
-// popup.js — PGSC Share Helper Extension Popup Logic
+// popup.js — PGSC Share Helper Extension Sidepanel Logic
 
 const statusDot  = document.getElementById('status-dot');
 const statusText = document.getElementById('status-text');
@@ -8,9 +8,28 @@ const progressFill  = document.getElementById('progress-fill');
 const progressLabel = document.getElementById('progress-label');
 const sessionStatus = document.getElementById('session-status');
 const btnCancel     = document.getElementById('btn-cancel');
+const logsBox       = document.getElementById('logs-box');
 
 async function loadState() {
-  const { pgsc_session } = await chrome.storage.local.get('pgsc_session');
+  const { pgsc_session, pgsc_logs = [] } = await chrome.storage.local.get(['pgsc_session', 'pgsc_logs']);
+
+  // Render logs
+  if (logsBox) {
+    logsBox.innerHTML = '';
+    pgsc_logs.forEach(log => {
+      const item = document.createElement('div');
+      item.className = 'log-item';
+      if (log.includes('ล้มเหลว') || log.includes('❌') || log.includes('Error') || log.includes('failed')) {
+        item.className = 'log-item error';
+      } else if (log.includes('เริ่ม') || log.includes('สำเร็จ') || log.includes('✅') || log.includes('Done')) {
+        item.className = 'log-item info';
+      }
+      item.textContent = log;
+      logsBox.appendChild(item);
+    });
+    // Auto scroll to bottom
+    logsBox.scrollTop = logsBox.scrollHeight;
+  }
 
   if (!pgsc_session) {
     showIdle('ไม่มี Session ที่กำลังทำงาน');
@@ -62,6 +81,6 @@ btnCancel.addEventListener('click', async () => {
   await loadState();
 });
 
-// Refresh every 2 seconds while popup is open
+// Refresh every 1.5 seconds while panel is open
 loadState();
-setInterval(loadState, 2000);
+setInterval(loadState, 1500);

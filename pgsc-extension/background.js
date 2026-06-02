@@ -11,6 +11,13 @@ const ALLOWED_ORIGINS = [
   'http://localhost:3000',
 ];
 
+// Configure Chrome Extension Side Panel click behavior
+if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((err) => {
+    console.error('[PGSC BG] Failed to set sidepanel behavior:', err);
+  });
+}
+
 // ---------------------
 // External messages from web app (via externally_connectable)
 // ---------------------
@@ -92,7 +99,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'PGSC_LOG') {
-    console.log('[PGSC BG]', message.text);
+    writeLog(message.text);
     sendResponse({ ok: true });
   }
 });
@@ -114,16 +121,23 @@ async function handleStartSession(message) {
     startedAt: Date.now(),
   };
 
-  await chrome.storage.local.set({ pgsc_session: session });
+  // Clear logs and initialize
+  const initMsg = `เริ่ม Session อัตโนมัติไปยัง ${groups.length} กลุ่ม`;
+  await chrome.storage.local.set({
+    pgsc_session: session,
+    pgsc_logs: [`[${new Date().toLocaleTimeString()}] ${initMsg}`]
+  });
 
   // Open or reuse a Facebook tab
   const [fbTab] = await chrome.tabs.query({ url: 'https://www.facebook.com/*', currentWindow: true });
 
   let targetTab;
   if (fbTab) {
+    await writeLog('ตรวจพบแท็บ Facebook เดิม ทำการรีโหลดเปิดหน้าโพสต์เป้าหมาย');
     await chrome.tabs.update(fbTab.id, { url: postUrl, active: true });
     targetTab = fbTab;
   } else {
+    await writeLog('สร้างแท็บ Facebook ใหม่เพื่อเริ่มแชร์');
     targetTab = await chrome.tabs.create({ url: postUrl, active: true });
   }
 
@@ -132,6 +146,7 @@ async function handleStartSession(message) {
     pgsc_fb_tab_id: targetTab.id,
   });
 
+  await writeLog(`Session เริ่มทำงาน: กำลังแชร์ไปยังกลุ่มที่ 1: ${groups[0].name}`);
   return { ok: true, sessionId, tabId: targetTab.id };
 }
 
@@ -142,6 +157,7 @@ async function cancelSession() {
       pgsc_session: { ...pgsc_session, status: 'cancelled' },
     });
   }
+  await writeLog('❌ ยกเลิก Session โดยผู้ใช้');
   // Notify web app
   await pushToWebApp({ type: 'PGSC_SESSION_CANCELLED' });
   return { ok: true };
@@ -196,10 +212,16 @@ async function handleResult(result, tab) {
 
   await chrome.storage.local.set({ pgsc_session });
 
+  const statusEmoji = result.status === 'posted' ? '✅ สำเร็จ' 
+                     : result.status === 'pending_admin' ? '⏳ รอแอดมินอนุมัติ' 
+                     : `❌ ล้มเหลว (${result.reason || 'ไม่ทราบสาเหตุ'})`;
+  await writeLog(`[กลุ่มที่ ${pgsc_session.currentIndex}/${pgsc_session.groups.length}] ${result.group} -> ${statusEmoji}`);
+
   // Push real-time result to web app
   await pushToWebApp({ type: 'PGSC_RESULT', data: result });
 
   if (isDone) {
+    await writeLog('🎉 สำเร็จครบทุกกลุ่มแล้ว!');
     await pushToWebApp({
       type: 'PGSC_SESSION_DONE',
       data: {
@@ -207,6 +229,9 @@ async function handleResult(result, tab) {
         sessionId: pgsc_session.sessionId,
       },
     });
+  } else {
+    const nextGroup = pgsc_session.groups[pgsc_session.currentIndex];
+    await writeLog(`เตรียมเปิดกลุ่มถัดไป: ${nextGroup.name}`);
   }
 
   return { ok: true, isDone };
@@ -219,6 +244,7 @@ async function handleSessionDone(results) {
       pgsc_session: { ...pgsc_session, status: 'completed', results },
     });
   }
+  await writeLog('🎉 สรุปผลลัพธ์ได้รับการบันทึกแล้ว');
   await pushToWebApp({ type: 'PGSC_SESSION_DONE', data: { results } });
 }
 
@@ -237,5 +263,17 @@ async function pushToWebApp(message) {
     }
   } catch (err) {
     console.warn('[PGSC BG] pushToWebApp error:', err.message);
+  }
+}
+
+async function writeLog(msg) {
+  console.log('[PGSC BG]', msg);
+  try {
+    const { pgsc_logs = [] } = await chrome.storage.local.get('pgsc_logs');
+    pgsc_logs.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
+    if (pgsc_logs.length > 50) pgsc_logs.shift(); // keep last 50 logs
+    await chrome.storage.local.set({ pgsc_logs });
+  } catch (err) {
+    console.error('Failed to write log:', err);
   }
 }
