@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "PGSC Facebook Helper",
+  "version": "1.0.0",
+  "description": "Clicks the Facebook group composer and inserts captions from PepsGroup Share Command. It never submits posts.",
+  "permissions": ["storage", "tabs"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://localhost/*",
+        "http://127.0.0.1/*",
+        "https://pepsproduction.github.io/PepsGroup-Share-Command/*"
+      ],
+      "js": ["app-bridge.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://www.facebook.com/groups/*",
+        "https://web.facebook.com/groups/*"
+      ],
+      "js": ["facebook-helper.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
