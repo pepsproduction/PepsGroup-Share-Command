@@ -146,6 +146,7 @@ export interface AppSettings {
 export interface AutomationSettings {
   smartQueueEnabled: boolean;
   skipBlacklisted: boolean;
+  cooldownEnabled: boolean;
   skipCooldown: boolean;
   skipNoLinkGroups: boolean;
   remindersEnabled: boolean;

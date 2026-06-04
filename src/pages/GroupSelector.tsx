@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import type { Group, Campaign } from '../types';
 import { groupStorage, campaignStorage, queueStorage, postStorage, settingsStorage } from '../lib/storage';
-import { daysSince } from '../lib/date';
 import { useNotifications } from '../components/NotificationContexts';
 import { GroupStatusBadge, QualityBadge, LinkBadge } from '../components/Badge';
 import { Modal } from '../components/Modal';
 import { isoNow } from '../lib/date';
 import { createQueueItemsFromPlan, planSmartQueue, summarizeSkipped } from '../lib/automation';
+import { getCooldownElapsedDays, getCooldownLeft, isGroupInCooldown } from '../lib/cooldown';
 
 type GradeFilter = 'all' | 'AB' | 'A' | 'cooldown';
 
@@ -14,12 +14,14 @@ export function GroupSelector() {
   const { addNotification } = useNotifications();
   const [groups] = useState<Group[]>(() => groupStorage.getAll());
   const [campaigns] = useState<Campaign[]>(() => campaignStorage.getAll());
+  const [settings] = useState(() => settingsStorage.get());
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [filterCat, setFilterCat] = useState('all');
   const [gradeFilter, setGradeFilter] = useState<GradeFilter>('all');
   const [showSummary, setShowSummary] = useState(false);
   const [targetCampaign, setTargetCampaign] = useState('');
   const [cooldownDays, setCooldownDays] = useState(7);
+  const cooldownEnabled = settings.automation.cooldownEnabled;
 
   const categories = ['all', ...Array.from(new Set(groups.map((g) => g.category)))];
 
@@ -28,7 +30,7 @@ export function GroupSelector() {
     const gradeMatch = gradeFilter === 'all' ? true
       : gradeFilter === 'AB' ? (g.qualityScore === 'A' || g.qualityScore === 'B')
       : gradeFilter === 'A' ? g.qualityScore === 'A'
-      : gradeFilter === 'cooldown' ? daysSince(g.lastPostedAt) >= cooldownDays
+      : gradeFilter === 'cooldown' ? !cooldownEnabled || getCooldownElapsedDays(g) >= cooldownDays
       : true;
     return catMatch && gradeMatch;
   });
@@ -52,8 +54,8 @@ export function GroupSelector() {
   const adminCount = selectedGroups.filter((g) => g.requiresAdminApproval).length;
   const specialCount = selectedGroups.filter((g) => !g.allowLinks).length;
   const noLinkCount = selectedGroups.filter((g) => !g.allowLinks).length;
-  const tooSoonCount = selectedGroups.filter((g) => daysSince(g.lastPostedAt) < g.cooldownDays).length;
-  const hasWarning = selectedGroups.some((g) => !g.allowLinks || g.isBlacklisted || daysSince(g.lastPostedAt) < g.cooldownDays);
+  const tooSoonCount = selectedGroups.filter((g) => isGroupInCooldown(g, cooldownEnabled)).length;
+  const hasWarning = selectedGroups.some((g) => !g.allowLinks || g.isBlacklisted || isGroupInCooldown(g, cooldownEnabled));
   const targetCampaignData = campaigns.find((c) => c.id === targetCampaign);
   const targetPost = targetCampaignData ? postStorage.getById(targetCampaignData.postId) : undefined;
   const previewPlan = targetCampaignData ? planSmartQueue({
@@ -62,7 +64,7 @@ export function GroupSelector() {
     groups,
     existingQueue: queueStorage.getAll(),
     post: targetPost,
-    settings: settingsStorage.get().automation,
+    settings: settings.automation,
   }) : null;
 
   function handleAddToQueue() {
@@ -82,7 +84,7 @@ export function GroupSelector() {
       groups,
       existingQueue: queueStorage.getAll(),
       post,
-      settings: settingsStorage.get().automation,
+      settings: settings.automation,
     });
     if (plan.eligibleGroups.length === 0) {
       addNotification('warning', 'Smart Queue ไม่พบกลุ่มที่พร้อม', summarizeSkipped(plan.skipped) || 'ตรวจสอบ cooldown, blacklist หรือกฎห้ามลิงก์');
@@ -118,12 +120,12 @@ export function GroupSelector() {
               {selected.size === filteredGroups.length ? 'ยกเลิกทั้งหมด' : 'เลือกทั้งหมด'}
             </button>
             <button className="btn btn-ghost btn-sm" onClick={() => setGradeFilter('AB')}>เลือก A+B</button>
-            <button className="btn btn-ghost btn-sm" onClick={() => setGradeFilter('cooldown')}>หมด Cooldown</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setGradeFilter('cooldown')}>{cooldownEnabled ? 'หมด Cooldown' : 'ไม่ใช้ Cooldown'}</button>
             <button className="btn btn-ghost btn-sm" onClick={() => setSelected(new Set())}>ล้าง</button>
           </div>
           <div className="flex items-center gap-1">
             <label className="form-check-label" style={{ fontSize: '0.8rem' }}>Cooldown วัน:</label>
-            <input type="number" min={1} className="form-input" style={{ width: '70px' }} value={cooldownDays} onChange={(e) => setCooldownDays(Number(e.target.value))} />
+            <input type="number" min={0} className="form-input" style={{ width: '70px' }} value={cooldownDays} onChange={(e) => setCooldownDays(Math.max(0, Number(e.target.value) || 0))} />
           </div>
         </div>
 
@@ -132,7 +134,7 @@ export function GroupSelector() {
             { key: 'all', label: 'ทุกระดับ' },
             { key: 'AB', label: 'A+B เท่านั้น' },
             { key: 'A', label: 'A เท่านั้น' },
-            { key: 'cooldown', label: `หมด Cooldown (${cooldownDays}วัน+)` },
+            { key: 'cooldown', label: cooldownEnabled ? `หมด Cooldown (${cooldownDays}วัน+)` : 'ไม่ใช้ Cooldown' },
           ].map((f) => (
             <button key={f.key} className={`filter-chip ${gradeFilter === f.key ? 'active' : ''}`} onClick={() => setGradeFilter(f.key as GradeFilter)}>{f.label}</button>
           ))}
@@ -171,7 +173,8 @@ export function GroupSelector() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {filteredGroups.map((g) => {
             const isSelected = selected.has(g.id);
-            const inCooldown = daysSince(g.lastPostedAt) < g.cooldownDays;
+            const cooldownLeft = getCooldownLeft(g, cooldownEnabled);
+            const inCooldown = cooldownLeft > 0;
             return (
               <div
                 key={g.id}
@@ -192,7 +195,7 @@ export function GroupSelector() {
                       <QualityBadge score={g.qualityScore} />
                       <GroupStatusBadge group={g} />
                       <LinkBadge allow={g.allowLinks} />
-                      {inCooldown && <span className="badge badge-rules">Cooldown {g.cooldownDays - daysSince(g.lastPostedAt)} วัน</span>}
+                      {inCooldown && <span className="badge badge-rules">Cooldown {cooldownLeft} วัน</span>}
                     </div>
                     <div className="text-xs text-muted mt-1">{g.category} · {g.memberCountNote}</div>
                   </div>
@@ -226,7 +229,9 @@ export function GroupSelector() {
             <span className="disclaimer-icon">⚠️</span>
             <div>
               <strong style={{ color: 'var(--status-rules)' }}>พบกลุ่มที่มีข้อจำกัด!</strong>
-              <div className="text-xs text-secondary mt-1">บางกลุ่มมีกฎห้ามแนบลิงก์หรืออยู่ใน Cooldown โปรดอ่านกฎกลุ่มก่อนโพสต์</div>
+              <div className="text-xs text-secondary mt-1">
+                {cooldownEnabled ? 'บางกลุ่มมีกฎห้ามแนบลิงก์หรืออยู่ใน Cooldown โปรดอ่านกฎกลุ่มก่อนโพสต์' : 'บางกลุ่มมีกฎห้ามแนบลิงก์หรืออยู่ใน blacklist โปรดอ่านกฎกลุ่มก่อนโพสต์'}
+              </div>
             </div>
           </div>
         )}

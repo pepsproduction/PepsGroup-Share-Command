@@ -1,17 +1,19 @@
 import { useState, useCallback } from 'react';
 import type { Group, QualityScore } from '../types';
-import { groupStorage } from '../lib/storage';
+import { groupStorage, settingsStorage } from '../lib/storage';
 import { openInNewTab, isFbGroupUrl, normalizeFbGroupUrl } from '../lib/facebook';
 import { useNotifications } from '../components/NotificationContexts';
 import { GroupStatusBadge, QualityBadge, LinkBadge } from '../components/Badge';
 import { ConfirmModal, Modal } from '../components/Modal';
-import { daysSince, formatDate, isoNow } from '../lib/date';
+import { formatDate, isoNow } from '../lib/date';
+import { formatCooldownValue, getCooldownLeft } from '../lib/cooldown';
 
 type FilterStatus = 'all' | 'ready' | 'admin' | 'no_link' | 'blacklist' | 'A' | 'B' | 'C' | 'D';
 
 export function GroupLibrary() {
   const { addNotification } = useNotifications();
   const [groups, setGroups] = useState<Group[]>(() => groupStorage.getAll());
+  const [settings] = useState(() => settingsStorage.get());
   const [search, setSearch] = useState('');
   const [filterCat, setFilterCat] = useState('all');
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
@@ -22,6 +24,7 @@ export function GroupLibrary() {
   const reload = useCallback(() => setGroups(groupStorage.getAll()), []);
 
   const categories = ['all', ...Array.from(new Set(groups.map((g) => g.category)))];
+  const cooldownEnabled = settings.automation.cooldownEnabled;
 
   const filtered = groups.filter((g) => {
     const matchSearch = !search || g.name.toLowerCase().includes(search.toLowerCase()) || g.keywords.some((k) => k.toLowerCase().includes(search.toLowerCase()));
@@ -57,6 +60,7 @@ export function GroupLibrary() {
     const updated: Group = {
       ...editGroup,
       url: cleanUrl,
+      cooldownDays: Math.max(0, Number(editGroup.cooldownDays) || 0),
       keywords: editKeywords.split(',').map((k) => k.trim()).filter(Boolean),
       updatedAt: isoNow(),
     };
@@ -131,7 +135,7 @@ export function GroupLibrary() {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' }}>
           {filtered.map((g) => {
-            const cooldownLeft = g.lastPostedAt ? Math.max(0, g.cooldownDays - daysSince(g.lastPostedAt)) : 0;
+            const cooldownLeft = getCooldownLeft(g, cooldownEnabled);
             return (
               <div key={g.id} className="group-card">
                 <div className="group-card-header">
@@ -153,7 +157,7 @@ export function GroupLibrary() {
                 <div className="group-card-meta">
                   <span>👥 {g.memberCountNote || '-'}</span>
                   <span>📅 โพสต์ล่าสุด: {formatDate(g.lastPostedAt)}</span>
-                  <span>⏱️ Cooldown: {g.cooldownDays} วัน</span>
+                  <span>⏱️ Cooldown: {formatCooldownValue(g, cooldownEnabled)}</span>
                   <span>⏳ อนุมัติ: ~{g.approvalAvgHours} ชม.</span>
                 </div>
 
@@ -249,8 +253,8 @@ export function GroupLibrary() {
               <input className="form-input" value={editGroup.memberCountNote} onChange={(e) => setEditGroup({ ...editGroup, memberCountNote: e.target.value })} />
             </div>
             <div className="form-group">
-              <label className="form-label">Cooldown (วัน)</label>
-              <input type="number" className="form-input" min={0} value={editGroup.cooldownDays} onChange={(e) => setEditGroup({ ...editGroup, cooldownDays: Number(e.target.value) })} />
+              <label className="form-label">Cooldown (วัน, 0 = ไม่มี)</label>
+              <input type="number" className="form-input" min={0} value={editGroup.cooldownDays} onChange={(e) => setEditGroup({ ...editGroup, cooldownDays: Math.max(0, Number(e.target.value) || 0) })} />
             </div>
           </div>
           <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>

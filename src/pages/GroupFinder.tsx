@@ -27,7 +27,7 @@ const DEFAULT_FORM: Omit<Group, 'id' | 'createdAt' | 'updatedAt'> = {
   rulesNote: '',
   qualityScore: 'B',
   lastPostedAt: null,
-  cooldownDays: 7,
+  cooldownDays: 0,
   isBlacklisted: false,
 };
 
@@ -245,7 +245,7 @@ export function GroupFinder() {
         rulesNote: 'นำเข้ากลุ่มผ่านระบบอัจฉริยะ',
         qualityScore: 'B',
         lastPostedAt: null,
-        cooldownDays: 7,
+        cooldownDays: 0,
         isBlacklisted: false,
         createdAt: now,
         updatedAt: now,
@@ -417,14 +417,14 @@ export function GroupFinder() {
                   </select>
                 </div>
                 <div className="form-group">
-                  <label className="form-label" htmlFor="grp-cooldown">Cooldown (วัน)</label>
+                  <label className="form-label" htmlFor="grp-cooldown">Cooldown (วัน, 0 = ไม่มี)</label>
                   <input
                     id="grp-cooldown"
                     type="number"
                     className="form-input"
                     min={0}
                     value={form.cooldownDays}
-                    onChange={(e) => setForm({ ...form, cooldownDays: Number(e.target.value) })}
+                    onChange={(e) => setForm({ ...form, cooldownDays: Math.max(0, Number(e.target.value) || 0) })}
                   />
                 </div>
                 <div className="form-group">

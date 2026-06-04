@@ -7,8 +7,8 @@ import type {
   Lead,
   ShareQueueItem,
 } from '../types';
-import { daysSince } from './date';
 import { createId } from './ids';
+import { getCooldownElapsedDays, getCooldownLeft, isGroupInCooldown } from './cooldown';
 
 export interface SmartQueueSkip {
   group: Group;
@@ -35,6 +35,7 @@ const DONE_STATUSES = new Set(['posted', 'approved', 'completed', 'skipped', 'fa
 export const DEFAULT_AUTOMATION_SETTINGS: AutomationSettings = {
   smartQueueEnabled: true,
   skipBlacklisted: true,
+  cooldownEnabled: false,
   skipCooldown: true,
   skipNoLinkGroups: true,
   remindersEnabled: true,
@@ -49,7 +50,7 @@ function queuePriority(group: Group): number {
   const quality = QUALITY_SCORE[group.qualityScore] ?? 0;
   const adminPenalty = group.requiresAdminApproval ? 4 : 0;
   const noLinkPenalty = group.allowLinks ? 0 : 8;
-  const cooldownAge = Math.min(daysSince(group.lastPostedAt), 60) / 10;
+  const cooldownAge = Math.min(getCooldownElapsedDays(group), 60) / 10;
   return quality * 10 + cooldownAge - adminPenalty - noLinkPenalty;
 }
 
@@ -83,8 +84,8 @@ export function planSmartQueue(args: {
         skipped.push({ group, reason: 'อยู่ใน blacklist' });
         return;
       }
-      if (settings.smartQueueEnabled && settings.skipCooldown && daysSince(group.lastPostedAt) < group.cooldownDays) {
-        skipped.push({ group, reason: `ยังอยู่ใน cooldown อีก ${group.cooldownDays - daysSince(group.lastPostedAt)} วัน` });
+      if (settings.smartQueueEnabled && settings.cooldownEnabled && settings.skipCooldown && isGroupInCooldown(group, true)) {
+        skipped.push({ group, reason: `ยังอยู่ใน cooldown อีก ${getCooldownLeft(group, true)} วัน` });
         return;
       }
       if (settings.smartQueueEnabled && settings.skipNoLinkGroups && args.post?.link && !group.allowLinks) {

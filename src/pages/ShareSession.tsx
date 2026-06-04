@@ -138,7 +138,7 @@ export function ShareSession() {
       },
     });
     return unsub;
-  }, [extInstalled, selectedCampaign]);
+  }, [extInstalled, selectedCampaign, addNotification]);
 
   const handleStartAutoShare = useCallback(async () => {
     if (!selectedCampaign || !autoPostUrl.trim()) {

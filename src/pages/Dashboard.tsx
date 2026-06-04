@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import type { AppPage } from '../types';
-import { groupStorage, campaignStorage, queueStorage } from '../lib/storage';
-import { daysSince, formatRelative } from '../lib/date';
+import { groupStorage, campaignStorage, queueStorage, settingsStorage } from '../lib/storage';
+import { formatRelative } from '../lib/date';
+import { getCooldownLeft, isGroupInCooldown } from '../lib/cooldown';
 
 interface DashboardProps {
   onNavigate: (page: AppPage) => void;
@@ -11,6 +12,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   const [groups] = useState(() => groupStorage.getAll());
   const [campaigns] = useState(() => campaignStorage.getAll());
   const [queue] = useState(() => queueStorage.getAll());
+  const [settings] = useState(() => settingsStorage.get());
+  const cooldownEnabled = settings.automation.cooldownEnabled;
 
   const readyGroups = groups.filter((g) => !g.isBlacklisted && !g.requiresAdminApproval && g.allowLinks);
   const pendingGroups = groups.filter((g) => g.requiresAdminApproval && !g.isBlacklisted);
@@ -31,10 +34,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
 
   const recentCampaigns = [...campaigns].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 3);
 
-  const overdueGroups = groups.filter((g) => {
-    if (!g.lastPostedAt) return false;
-    return daysSince(g.lastPostedAt) < g.cooldownDays;
-  });
+  const overdueGroups = groups.filter((group) => isGroupInCooldown(group, cooldownEnabled));
 
   return (
     <div className="page-content">
@@ -138,7 +138,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                     <div className="timeline-dot" style={{ background: 'var(--status-rules)' }} />
                     <div>
                       <div className="text-sm font-bold">{g.name}</div>
-                      <div className="text-xs text-muted">เหลือ {g.cooldownDays - daysSince(g.lastPostedAt)} วัน</div>
+                      <div className="text-xs text-muted">เหลือ {getCooldownLeft(g, cooldownEnabled)} วัน</div>
                     </div>
                   </div>
                 ))}

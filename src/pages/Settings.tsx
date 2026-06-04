@@ -92,6 +92,21 @@ export function Settings() {
     reloadSoon();
   }
 
+  function handleDisableCooldownEverywhere() {
+    const now = new Date().toISOString();
+    const groups = groupStorage.getAll();
+    groupStorage.save(groups.map((group) => ({ ...group, cooldownDays: 0, updatedAt: now })));
+    saveSettings({
+      ...settings,
+      automation: {
+        ...settings.automation,
+        cooldownEnabled: false,
+        skipCooldown: false,
+      },
+    }, false);
+    addNotification('success', 'ปิด Cooldown แล้ว', `ตั้ง cooldown ของ ${groups.length} กลุ่มเป็น 0 วันเรียบร้อย`);
+  }
+
   function handleBrowserNotificationPermission() {
     if (!('Notification' in window)) {
       addNotification('warning', 'Browser นี้ไม่รองรับ Notification', '');
@@ -215,8 +230,23 @@ export function Settings() {
             </label>
             <div className="form-row-3">
               <label className="form-check"><input type="checkbox" checked={settings.automation.skipBlacklisted} onChange={(e) => saveAutomation({ skipBlacklisted: e.target.checked })} /> ข้าม blacklist</label>
-              <label className="form-check"><input type="checkbox" checked={settings.automation.skipCooldown} onChange={(e) => saveAutomation({ skipCooldown: e.target.checked })} /> ข้าม cooldown</label>
+              <label className="form-check"><input type="checkbox" checked={settings.automation.cooldownEnabled} onChange={(e) => saveAutomation({ cooldownEnabled: e.target.checked, skipCooldown: e.target.checked })} /> เปิดใช้ cooldown</label>
               <label className="form-check"><input type="checkbox" checked={settings.automation.skipNoLinkGroups} onChange={(e) => saveAutomation({ skipNoLinkGroups: e.target.checked })} /> ข้ามกลุ่มห้ามลิงก์</label>
+            </div>
+            {settings.automation.cooldownEnabled && (
+              <label className="form-check">
+                <input type="checkbox" checked={settings.automation.skipCooldown} onChange={(e) => saveAutomation({ skipCooldown: e.target.checked })} />
+                <div>
+                  <div className="font-bold text-sm">ให้ Smart Queue ข้ามกลุ่มที่ยังติด cooldown</div>
+                  <div className="text-xs text-muted">ถ้าปิดตัวเลือกนี้ ระบบจะแสดงเตือนแต่ยังเพิ่มกลุ่มเข้าคิวได้</div>
+                </div>
+              </label>
+            )}
+            <div className="flex gap-1" style={{ flexWrap: 'wrap' }}>
+              <button className="btn btn-secondary" onClick={handleDisableCooldownEverywhere}>ปิด cooldown และตั้งทุกกลุ่มเป็น 0 วัน</button>
+              <span className="text-xs text-muted" style={{ alignSelf: 'center' }}>
+                สถานะ: {settings.automation.cooldownEnabled ? 'เปิดใช้ cooldown' : 'ไม่ใช้ cooldown'}
+              </span>
             </div>
             <div className="divider" />
             <label className="form-check">
