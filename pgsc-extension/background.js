@@ -3,7 +3,7 @@
 // Handles: tab management, session state, message routing
 // =====================================================================
 
-const PGSC_VERSION = '1.0.0';
+const PGSC_VERSION = '1.1.0';
 const ALLOWED_ORIGINS = [
   'https://pepsproduction.github.io',
   'http://localhost:5173',
@@ -106,7 +106,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'PGSC_NAVIGATE_POST') {
     chrome.storage.local.get('pgsc_session').then(({ pgsc_session }) => {
       if (pgsc_session && pgsc_session.status === 'running') {
-        chrome.tabs.update(sender.tab.id, { url: pgsc_session.postUrl });
+        navigatePostTab(sender.tab, pgsc_session.postUrl).catch((err) => {
+          writeLog(`เปิดหน้าโพสต์ถัดไปไม่สำเร็จ: ${err.message}`);
+        });
       }
     });
     sendResponse({ ok: true });
@@ -139,7 +141,10 @@ async function handleStartSession(message) {
   });
 
   // Open or reuse a Facebook tab
-  const [fbTab] = await chrome.tabs.query({ url: 'https://www.facebook.com/*', currentWindow: true });
+  const [fbTab] = await chrome.tabs.query({
+    url: ['https://www.facebook.com/*', 'https://web.facebook.com/*'],
+    currentWindow: true,
+  });
 
   let targetTab;
   if (fbTab) {
@@ -222,8 +227,9 @@ async function handleResult(result, tab) {
 
   await chrome.storage.local.set({ pgsc_session });
 
-  const statusEmoji = result.status === 'posted' ? '✅ สำเร็จ' 
-                     : result.status === 'pending_admin' ? '⏳ รอแอดมินอนุมัติ' 
+  const statusEmoji = result.status === 'posted' ? '✅ สำเร็จ'
+                     : result.status === 'pending_admin' ? '⏳ รอแอดมินอนุมัติ'
+                     : result.status === 'skipped' ? `⏭️ ข้าม (${result.reason || 'ไม่พบกลุ่ม'})`
                      : `❌ ล้มเหลว (${result.reason || 'ไม่ทราบสาเหตุ'})`;
   await writeLog(`[กลุ่มที่ ${pgsc_session.currentIndex}/${pgsc_session.groups.length}] ${result.group} -> ${statusEmoji}`);
 
@@ -256,6 +262,32 @@ async function handleSessionDone(results) {
   }
   await writeLog('🎉 สรุปผลลัพธ์ได้รับการบันทึกแล้ว');
   await pushToWebApp({ type: 'PGSC_SESSION_DONE', data: { results } });
+}
+
+async function navigatePostTab(tab, postUrl) {
+  if (!tab?.id) return;
+
+  const currentUrl = tab.url || '';
+  if (normalizeUrlForCompare(currentUrl) === normalizeUrlForCompare(postUrl)) {
+    await writeLog('รีโหลดหน้าโพสต์เดิมเพื่อเริ่มกลุ่มถัดไป');
+    await chrome.tabs.reload(tab.id);
+    return;
+  }
+
+  await writeLog('เปิดหน้าโพสต์เป้าหมายใหม่เพื่อเริ่มกลุ่มถัดไป');
+  await chrome.tabs.update(tab.id, { url: postUrl, active: true });
+}
+
+function normalizeUrlForCompare(url) {
+  try {
+    const parsed = new URL(url);
+    parsed.hash = '';
+    parsed.searchParams.delete('__cft__');
+    parsed.searchParams.delete('__tn__');
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return url || '';
+  }
 }
 
 // ---------------------

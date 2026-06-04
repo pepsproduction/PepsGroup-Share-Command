@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "PGSC Facebook Share Helper",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "ช่วยแชร์โพสต์ไปยังกลุ่ม Facebook ผ่าน Native Share Dialog อัตโนมัติ โดย PepsGroup Share Command",
   "permissions": ["scripting", "tabs", "storage", "activeTab", "sidePanel"],
   "host_permissions": [
     "https://www.facebook.com/*",
+    "https://web.facebook.com/*",
     "https://pepsproduction.github.io/*",
     "http://localhost:*/*"
   ],
@@ -23,7 +24,10 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.facebook.com/*"],
+      "matches": [
+        "https://www.facebook.com/*",
+        "https://web.facebook.com/*"
+      ],
       "js": ["fb_content.js"],
       "run_at": "document_idle"
     },

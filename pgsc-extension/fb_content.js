@@ -1,33 +1,65 @@
 // =====================================================================
 // fb_content.js — PGSC Share Helper (Facebook Content Script)
-// Runs on: https://www.facebook.com/*
-// Purpose: Automates the Native Share Dialog for each group
+// Runs on: https://www.facebook.com/* and https://web.facebook.com/*
+// Purpose: Automates Facebook native share-to-group flow for each group
 // =====================================================================
 
 (function () {
   'use strict';
 
-  let SESSION = null;   // Current group to share to
+  let SESSION = null;
   let RUNNING = false;
+
+  const POST_PAGE_PATTERNS = [
+    /facebook\.com\/.+\/posts\//i,
+    /facebook\.com\/photo/i,
+    /facebook\.com\/video/i,
+    /facebook\.com\/permalink/i,
+    /facebook\.com\/share\//i,
+    /facebook\.com\/watch/i,
+  ];
+
+  const RATE_LIMIT_TEXTS = [
+    'เราได้จำกัดจำนวนการโพสต์',
+    'จำกัดจำนวนการโพสต์',
+    'แสดงความคิดเห็น หรือทำสิ่งอื่นๆ',
+    'ไม่ละเมิดมาตรฐานชุมชนของเรา',
+    'โปรดแจ้งให้เราทราบ',
+    'temporarily blocked',
+    'we limit how often',
+    'we restrict certain activity',
+    'you can’t post',
+    'you cannot post',
+    'try again later',
+  ];
+
+  const PENDING_APPROVAL_TEXTS = [
+    'รอแอดมิน',
+    'รอการอนุมัติ',
+    'pending approval',
+    'approval',
+    'approve',
+    'อนุมัติ',
+  ];
+
+  class ShareFlowError extends Error {
+    constructor(code, message) {
+      super(message);
+      this.name = 'ShareFlowError';
+      this.code = code;
+    }
+  }
 
   // ---------------------
   // Init: signal background that this FB tab is ready
   // ---------------------
   function init() {
-    // Only run on post pages, not home/groups etc.
-    // We wait for DOM to settle, then signal background
     const url = window.location.href;
-    const isPostPage =
-      /facebook\.com\/.+\/posts\//i.test(url) ||
-      /facebook\.com\/photo/i.test(url) ||
-      /facebook\.com\/video/i.test(url) ||
-      /facebook\.com\/permalink/i.test(url);
-
+    const isPostPage = POST_PAGE_PATTERNS.some((pattern) => pattern.test(url));
     if (!isPostPage) return;
 
     log('Content script initialized on post page');
 
-    // Wait a bit for the page to finish loading before signalling ready
     waitForPageReady().then(() => {
       chrome.runtime.sendMessage({ type: 'PGSC_FB_READY' }, (response) => {
         if (chrome.runtime.lastError) return;
@@ -39,8 +71,8 @@
   }
 
   async function waitForPageReady() {
-    // Wait until the main article element is present on the page
-    return waitForElement('[role="article"]', 10000);
+    await waitForElement('[role="article"], [data-pagelet^="FeedUnit"], [data-pagelet="MainFeed"]', 15000);
+    await delay(randomBetween(700, 1300));
   }
 
   // ---------------------
@@ -58,7 +90,7 @@
       return true;
     }
     if (message.type === 'PGSC_GET_STATUS') {
-      sendResponse({ running: RUNNING });
+      sendResponse({ running: RUNNING, session: SESSION });
     }
   });
 
@@ -81,28 +113,38 @@
       };
     } catch (err) {
       log(`Error sharing to ${group.name}: ${err.message}`);
-      // Close any open dialog before next attempt
       await closeOpenDialogs();
+
+      const code = err.code || (hasAnyText(err.message, ['pending']) ? 'pending_admin' : 'failed');
+      const status = code === 'pending_admin'
+        ? 'pending_admin'
+        : code === 'rate_limited' || code === 'group_not_found'
+          ? 'skipped'
+          : 'failed';
+
       result = {
         group: group.name,
         groupId: group.id,
-        status: err.message.includes('pending') ? 'pending_admin' : 'failed',
-        reason: err.message,
+        status,
+        reason: code === 'rate_limited' ? 'rate_limited' : err.message,
         timestamp: new Date().toISOString(),
       };
     }
 
-    // Report result to background
     chrome.runtime.sendMessage({ type: 'PGSC_RESULT', result }, (response) => {
-      if (chrome.runtime.lastError) return;
+      if (chrome.runtime.lastError) {
+        RUNNING = false;
+        return;
+      }
       const isDone = response?.isDone;
       RUNNING = false;
 
       if (!isDone) {
-        const delayMs = randomBetween(5000, 9000);
+        const delayMs = result.reason === 'rate_limited'
+          ? randomBetween(1000, 2200)
+          : randomBetween(5000, 9000);
         log(`Waiting ${Math.round(delayMs / 1000)}s before next group...`);
         setTimeout(() => {
-          // Instruct background page to reload to postUrl to clear state
           chrome.runtime.sendMessage({ type: 'PGSC_NAVIGATE_POST' });
         }, delayMs);
       } else {
@@ -115,226 +157,271 @@
   // Core Share Workflow
   // ---------------------
   async function shareToGroup(group, caption) {
-    // Step 1: Click Share button on the post
-    await clickShareButton();
+    await runStep('เปิดลิงก์และกดลูกศรแชร์', () => clickShareButton());
+    await runStep('เลือกเมนูแชร์ไปยังกลุ่ม', () => clickGroupsOption());
+    await runStep(`ค้นหาและเลือกกลุ่ม: ${group.name}`, () => searchAndSelectGroup(group.name));
 
-    // Step 2: Click "กลุ่ม" in the share options sheet
-    await clickGroupsOption();
-
-    // Step 3: Search for the group and select it
-    await searchAndSelectGroup(group.name);
-
-    // Step 4: Type / paste caption in composer
     if (caption && caption.trim()) {
-      await insertCaption(caption.trim());
+      await runStep('วางแคปชั่นในช่องโพสต์', () => insertCaption(caption.trim()));
     }
 
-    // Step 5: Click Post button
-    await clickPostButton();
+    await runStep('กดโพสต์', () => clickPostButton());
+    await runStep('ตรวจผลลัพธ์หลังโพสต์', () => detectSuccess());
+    log(`Shared to: ${group.name}`);
+  }
 
-    // Step 6: Detect success
-    await detectSuccess();
-
-    log(`✅ Shared to: ${group.name}`);
+  async function runStep(label, task) {
+    log(`Step: ${label}`);
+    await assertNotRateLimited(label);
+    const result = await task();
+    await assertNotRateLimited(label);
+    return result;
   }
 
   // ---------------------
-  // Step 1: Find and click the Share button
+  // Step 1: Find and click the Share arrow on the post
   // ---------------------
   async function clickShareButton() {
     const btn = await findShareButton();
-    if (!btn) throw new Error('Share button not found on this post');
+    if (!btn) throw new ShareFlowError('share_not_found', 'Share arrow button not found on this post');
 
-    await delay(randomBetween(400, 1000));
+    await delay(randomBetween(400, 900));
     simulateClick(btn);
-    await delay(randomBetween(1000, 2000));
+    await waitForShareSurface(8000);
   }
 
-  async function findShareButton(retries = 3) {
+  async function findShareButton(retries = 5) {
     for (let attempt = 0; attempt < retries; attempt++) {
-      // Find the main article container first
-      const article = document.querySelector('[role="article"]');
-      if (!article) {
-        if (attempt < retries - 1) await delay(2000);
-        continue;
+      const scopes = getPostScopes();
+
+      for (const scope of scopes) {
+        const btn = findBestShareButtonInScope(scope);
+        if (btn) return btn;
       }
 
-      // Try aria-label selectors first (more robust with substring match) inside the article
-      const ariaSelectors = [
-        '[aria-label*="แชร์"]', 
-        '[aria-label*="share" i]', 
-        '[aria-label*="Share" i]',
-        '[aria-label="ส่ง"]',
-        '[aria-label="Send"]'
-      ];
-      for (const sel of ariaSelectors) {
-        const els = article.querySelectorAll(sel);
-        for (const el of els) {
-          if (isClickable(el) || el.closest('[role="button"],[tabindex]')) return el;
-        }
-      }
-
-      // Fallback: find by button/role=button + text that contains share keywords inside the article
-      const buttons = article.querySelectorAll('[role="button"],button,div[tabindex="0"]');
-      for (const btn of buttons) {
-        const text = btn.textContent?.trim() || '';
-        const lowerText = text.toLowerCase();
-        if (lowerText === 'แชร์' || lowerText === 'share' || lowerText === 'ส่ง' || lowerText === 'send') return btn;
-        if (lowerText.includes('แชร์') || lowerText.includes('share')) {
-          if (text.length < 25) return btn; // limit length to avoid catching huge text blocks
-        }
-        // Also check if it has a share count (like "88 แชร์" or "88 Shares")
-        if (/\d+\s*(แชร์|share|shares)/i.test(lowerText) && text.length < 25) return btn;
-      }
-
-      if (attempt < retries - 1) await delay(2000);
+      await delay(randomBetween(900, 1400));
     }
     return null;
   }
 
+  function getPostScopes() {
+    const articles = [...document.querySelectorAll('[role="article"]')]
+      .filter(isVisible)
+      .sort((a, b) => area(b) - area(a));
+
+    const feedUnits = [...document.querySelectorAll('[data-pagelet^="FeedUnit"], [data-pagelet="MainFeed"]')]
+      .filter(isVisible)
+      .sort((a, b) => area(b) - area(a));
+
+    return [...articles, ...feedUnits, document.body];
+  }
+
+  function findBestShareButtonInScope(scope) {
+    const candidates = [...scope.querySelectorAll(
+      '[aria-label*="แชร์"], [aria-label*="share" i], [role="button"], button, a[role="button"], div[tabindex="0"]'
+    )].filter(el => isVisible(el) && !isInsideDialog(el));
+
+    const scored = candidates
+      .map((el) => {
+        const clickable = getClickableAncestor(el);
+        if (!clickable || !isVisible(clickable) || isDisabled(clickable)) return null;
+
+        const text = normalizedElementText(clickable);
+        const label = normalizeText(clickable.getAttribute('aria-label') || el.getAttribute('aria-label') || '');
+        const combined = `${text} ${label}`.trim();
+        const rect = clickable.getBoundingClientRect();
+        let score = 0;
+
+        if (exactTextMatch(text, ['แชร์', 'share', 'ส่ง', 'send'])) score += 100;
+        if (exactTextMatch(label, ['แชร์', 'share', 'ส่ง', 'send'])) score += 90;
+        if (hasAnyText(combined, ['แชร์', 'share'])) score += 60;
+        if (hasAnyText(combined, ['comment', 'ความคิดเห็น', 'like', 'ถูกใจ'])) score -= 80;
+        if (text.length > 80) score -= 50;
+        if (rect.width <= 72 && rect.height <= 72 && clickable.querySelector('svg')) score += 10;
+
+        return score > 0 ? { el: clickable, score } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score);
+
+    return scored[0]?.el || null;
+  }
+
   // ---------------------
-  // Step 2: Click "กลุ่ม" in share sheet
+  // Step 2: Click Group option in the share sheet
   // ---------------------
   async function clickGroupsOption() {
-    // Wait a brief moment for the share menu overlay to render
-    await delay(1000);
+    const surface = await waitForShareSurface(8000);
+    if (!surface) throw new ShareFlowError('share_menu_not_found', 'Share menu did not open');
 
-    // Search the entire document for "แชร์ไปยังกลุ่ม" or "Share to a group" options.
-    // This is much safer than waiting for a specific dialog selector which changes frequently.
-    const groupsBtn = findInContainer(
-      document, 
-      ['แชร์ไปยังกลุ่ม', 'Share to a group', 'กลุ่ม', 'Group'], 
-      ['div', 'span', 'a', 'button', '[role="menuitem"]']
-    );
-    
-    if (!groupsBtn) throw new Error('Groups option not found in share sheet');
+    const groupBtn = await waitForElementByCheck(() => findGroupsOption(surface), 8000);
+    if (!groupBtn) throw new ShareFlowError('group_option_not_found', 'Groups option not found in share sheet');
 
-    simulateClick(groupsBtn);
-    await delay(randomBetween(1500, 2500));
+    simulateClick(groupBtn);
+    await delay(randomBetween(1000, 1800));
+  }
+
+  function findGroupsOption(surface) {
+    const candidates = [...surface.querySelectorAll(
+      '[role="button"], [role="menuitem"], button, a, div[tabindex="0"], span'
+    )].filter(isVisible);
+
+    const scored = candidates
+      .map((el) => {
+        const clickable = getClickableAncestor(el);
+        if (!clickable || !isVisible(clickable) || isDisabled(clickable)) return null;
+
+        const text = normalizedElementText(clickable);
+        if (!text || text.length > 160) return null;
+
+        let score = 0;
+        if (hasAnyText(text, ['แชร์ไปยังกลุ่ม', 'share to a group'])) score += 120;
+        if (exactTextMatch(text, ['กลุ่ม', 'group', 'groups'])) score += 90;
+        if (hasAnyText(text, ['กลุ่ม', 'group'])) score += 45;
+        if (hasAnyText(text, ['เพจ', 'page', 'สตอรี่', 'story', 'messenger', 'คัดลอก', 'copy'])) score -= 80;
+
+        return score > 0 ? { el: clickable, score } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score);
+
+    return scored[0]?.el || null;
+  }
+
+  async function waitForShareSurface(timeout) {
+    return waitForElementByCheck(() => {
+      const menu = getTopLayer('[role="menu"], [role="dialog"]');
+      if (menu && hasAnyText(menu.textContent || '', ['กลุ่ม', 'group', 'share', 'แชร์'])) return menu;
+      return null;
+    }, timeout);
   }
 
   // ---------------------
-  // Step 3: Search and select group
+  // Step 3: Search and select first matching group result
   // ---------------------
   async function searchAndSelectGroup(groupName) {
-    await delay(randomBetween(400, 800));
+    const surface = await waitForElementByCheck(() => {
+      const dialog = getTopDialog();
+      if (dialog && findGroupSearchInput(dialog)) return dialog;
+      return null;
+    }, 10000);
 
-    // Wait for the group search input to appear in the DOM (up to 6 seconds)
-    const input = await waitForElement('input[placeholder*="ค้นหา"],input[placeholder*="search" i]', 6000);
-    if (!input) throw new Error('Group search input not found');
+    if (!surface) throw new ShareFlowError('group_search_not_found', 'Group search dialog not found');
 
-    // Clear and type group name
+    const input = findGroupSearchInput(surface);
+    if (!input) throw new ShareFlowError('group_search_not_found', 'Group search input not found');
+
     input.focus();
-    await delay(randomBetween(200, 500));
-
-    // Set value and trigger React/framework events
+    await delay(randomBetween(200, 450));
     setNativeValue(input, '');
+    await delay(randomBetween(120, 260));
     await typeIntoInput(input, groupName);
+    await assertNotRateLimited('ค้นหากลุ่ม');
 
-    await delay(randomBetween(2000, 3000));
+    const groupItem = await waitForFirstGroupResult(surface, input, groupName, 9000);
+    if (!groupItem) throw new ShareFlowError('group_not_found', `Group "${groupName}" not found in search results`);
 
-    // Find the group result item anywhere in the document
-    const groupItem = await waitForGroupResult(document, groupName, 6000);
-    if (!groupItem) throw new Error(`Group "${groupName}" not found in search results`);
-
-    await delay(randomBetween(400, 800));
+    await delay(randomBetween(350, 750));
     simulateClick(groupItem);
-    await delay(randomBetween(1500, 2500));
+    await delay(randomBetween(1200, 2200));
   }
 
-  function findSearchInput(container) {
-    // Try placeholder-based selectors using case-insensitive matches
-    const input = container.querySelector('input[placeholder*="ค้นหา"],input[placeholder*="search" i]');
-    if (input) return input;
-    // Fallback: first text input in the modal
-    return container.querySelector('input[type="text"],input:not([type="hidden"])');
-  }
+  function findGroupSearchInput(container) {
+    const inputs = [...container.querySelectorAll('input[type="text"], input:not([type]), input[placeholder], input[aria-label]')]
+      .filter(isVisible);
 
-  async function waitForGroupResult(container, groupName, timeout) {
-    const normalized = groupName.trim().toLowerCase();
-    const shortName = normalized.substring(0, Math.min(normalized.length, 10));
-
-    return new Promise((resolve) => {
-      const check = () => {
-        // Check various result container types
-        const candidates = container.querySelectorAll(
-          '[role="option"],[role="listitem"],[role="button"],li,div[tabindex]'
-        );
-        for (const el of candidates) {
-          const text = (el.textContent || '').toLowerCase().trim();
-          if (text.includes(shortName) && text.length < 200) {
-            resolve(el);
-            return true;
-          }
-        }
-        return false;
-      };
-
-      if (check()) return;
-
-      const obs = new MutationObserver(() => { if (check()) obs.disconnect(); });
-      obs.observe(container, { childList: true, subtree: true, characterData: true });
-      setTimeout(() => { obs.disconnect(); resolve(null); }, timeout);
+    const preferred = inputs.find((input) => {
+      const text = normalizeText([
+        input.getAttribute('placeholder'),
+        input.getAttribute('aria-label'),
+        input.value,
+      ].filter(Boolean).join(' '));
+      return hasAnyText(text, ['ค้นหากลุ่ม', 'ค้นหา', 'search groups', 'search group', 'search']);
     });
+
+    return preferred || inputs[0] || null;
+  }
+
+  async function waitForFirstGroupResult(surface, input, groupName, timeout) {
+    return waitForElementByCheck(() => findFirstGroupResult(surface, input, groupName), timeout);
+  }
+
+  function findFirstGroupResult(surface, input, groupName) {
+    const target = normalizeText(groupName);
+    const shortTarget = target.slice(0, Math.min(target.length, 12));
+    const inputRect = input.getBoundingClientRect();
+
+    const candidates = [...surface.querySelectorAll(
+      '[role="option"], [role="listitem"], [role="button"], a, div[tabindex="0"]'
+    )].filter((el) => {
+      if (!isVisible(el) || isDisabled(el) || el.contains(input) || input.contains(el)) return false;
+      const rect = el.getBoundingClientRect();
+      if (rect.bottom <= inputRect.bottom - 4) return false;
+      const text = normalizedElementText(el);
+      if (!text || text.length > 260) return false;
+      if (hasAnyText(text, ['ค้นหากลุ่ม', 'search groups', 'กลุ่มทั้งหมด', 'all groups'])) return false;
+      return true;
+    });
+
+    const scored = candidates
+      .map((el, order) => {
+        const text = normalizedElementText(el);
+        let score = 0;
+
+        if (text === target) score += 150;
+        if (target && text.includes(target)) score += 120;
+        if (shortTarget && text.includes(shortTarget)) score += 70;
+        if (el.querySelector('img, svg')) score += 10;
+        if (hasAnyText(text, ['กลุ่มสาธารณะ', 'public group', 'กลุ่มส่วนตัว', 'private group'])) score += 5;
+        if (hasAnyText(text, ['สร้างกลุ่ม', 'create group', 'ดูเพิ่มเติม', 'see more'])) score -= 80;
+
+        return score > 0 ? { el: getClickableAncestor(el) || el, score: score - order } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score);
+
+    return scored[0]?.el || null;
   }
 
   // ---------------------
   // Step 4: Insert caption into the post composer
   // ---------------------
   async function insertCaption(text) {
-    // Wait for post composer area (contenteditable div)
-    const dialog = document.querySelector('[role="dialog"]');
-    if (!dialog) throw new Error('Post composer dialog not found');
+    const dialog = getTopDialog();
+    if (!dialog) throw new ShareFlowError('composer_not_found', 'Post composer dialog not found');
 
-    const editor = await waitForComposerEditor(dialog, 5000);
-    if (!editor) {
-      log('Caption editor not found, skipping caption');
-      return;
-    }
+    const editor = await waitForComposerEditor(dialog, 7000);
+    if (!editor) throw new ShareFlowError('composer_not_found', 'Caption editor not found');
 
     editor.focus();
-    await delay(randomBetween(300, 600));
+    await delay(randomBetween(300, 650));
 
-    // Try paste approach first (most reliable for Lexical/Draft.js editors)
     const pasteSuccess = await pasteIntoEditor(editor, text);
     if (!pasteSuccess) {
-      // Fallback: execCommand
       const cmdSuccess = document.execCommand('insertText', false, text);
-      if (!cmdSuccess) {
-        // Last resort: type character by character
-        await typeChars(editor, text);
-      }
+      if (!cmdSuccess) await typeChars(editor, text);
     }
 
-    // Trigger input/change events
     editor.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: text, bubbles: true }));
-    await delay(randomBetween(300, 600));
+    editor.dispatchEvent(new Event('change', { bubbles: true }));
+    await delay(randomBetween(450, 900));
   }
 
   async function waitForComposerEditor(dialog, timeout) {
-    const selectors = [
-      'div[contenteditable="true"]',
-      '[data-lexical-editor="true"]',
-      'div[role="textbox"]',
-    ];
+    return waitForElementByCheck(() => {
+      const editors = [...dialog.querySelectorAll(
+        'div[contenteditable="true"], [data-lexical-editor="true"], div[role="textbox"]'
+      )].filter(isVisible);
 
-    return new Promise((resolve) => {
-      const check = () => {
-        for (const sel of selectors) {
-          const els = dialog.querySelectorAll(sel);
-          for (const el of els) {
-            if (el.offsetHeight > 0) { resolve(el); return true; }
-          }
-        }
-        return false;
-      };
-
-      if (check()) return;
-
-      const obs = new MutationObserver(() => { if (check()) obs.disconnect(); });
-      obs.observe(dialog, { childList: true, subtree: true });
-      setTimeout(() => { obs.disconnect(); resolve(null); }, timeout);
-    });
+      return editors.find((editor) => {
+        const text = normalizeText([
+          editor.getAttribute('aria-label'),
+          editor.getAttribute('placeholder'),
+          editor.textContent,
+        ].filter(Boolean).join(' '));
+        return !hasAnyText(text, ['ค้นหากลุ่ม', 'search groups']);
+      }) || null;
+    }, timeout);
   }
 
   async function pasteIntoEditor(editor, text) {
@@ -347,9 +434,8 @@
         cancelable: true,
       });
       editor.dispatchEvent(evt);
-      await delay(300);
-      // Verify text was inserted
-      return (editor.textContent || editor.value || '').includes(text.substring(0, 20));
+      await delay(350);
+      return editorTextContains(editor, text);
     } catch {
       return false;
     }
@@ -359,145 +445,286 @@
     for (const char of text) {
       editor.focus();
       document.execCommand('insertText', false, char);
-      editor.dispatchEvent(new InputEvent('input', { bubbles: true }));
-      await delay(randomBetween(50, 130));
+      editor.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: char, bubbles: true }));
+      await delay(randomBetween(20, 65));
     }
+  }
+
+  function editorTextContains(editor, text) {
+    const inserted = normalizeText(editor.textContent || editor.value || '');
+    const expected = normalizeText(text).slice(0, 20);
+    return expected ? inserted.includes(expected) : true;
   }
 
   // ---------------------
   // Step 5: Click Post button
   // ---------------------
   async function clickPostButton() {
-    const dialog = document.querySelector('[role="dialog"]');
-    if (!dialog) throw new Error('Dialog not found when clicking Post');
+    const dialog = getTopDialog();
+    if (!dialog) throw new ShareFlowError('dialog_not_found', 'Dialog not found when clicking Post');
 
-    const postBtn = findPostButton(dialog);
-    if (!postBtn) throw new Error('Post button not found');
+    const postBtn = await waitForElementByCheck(() => findPostButton(dialog), 7000);
+    if (!postBtn) throw new ShareFlowError('post_button_not_found', 'Post button not found or still disabled');
 
-    await delay(randomBetween(500, 1200));
+    await delay(randomBetween(500, 1100));
     simulateClick(postBtn);
-    await delay(randomBetween(2000, 4000));
+    await delay(randomBetween(1200, 2200));
   }
 
   function findPostButton(container) {
-    const buttons = container.querySelectorAll('[role="button"],button');
-    for (const btn of buttons) {
-      const text = btn.textContent?.trim() || '';
-      // In the share dialog, it could be โพสต์, Post, แชร์, Share, ส่ง, Send
-      if (/^โพสต์$|^Post$|^แชร์$|^Share$|^ส่ง$|^Send$/i.test(text)) return btn;
-    }
-    return null;
+    const buttons = [...container.querySelectorAll('[role="button"], button')]
+      .filter(btn => isVisible(btn) && !isDisabled(btn));
+
+    return buttons.find((btn) => {
+      return hasExactElementLabel(btn, ['โพสต์', 'post', 'แชร์', 'share', 'ส่ง', 'send']);
+    }) || null;
   }
 
   // ---------------------
   // Step 6: Detect success/failure
   // ---------------------
   async function detectSuccess() {
-    // If dialog closes, it's a success (FB closes dialog on successful submit).
-    // Increase to 10 seconds for slow network connections
-    const dialogGone = await waitForDialogToClose(10000);
-    if (dialogGone) return; // Success!
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 14000) {
+      await assertNotRateLimited('ตรวจผลลัพธ์');
 
-    // If dialog is still open, check for error messages
-    const dialog = document.querySelector('[role="dialog"]');
-    if (dialog) {
-      const text = dialog.textContent || '';
-      if (text.includes('รอแอดมิน') || text.includes('pending approval') || text.includes('approval') || text.includes('อนุมัติ')) {
-        throw new Error('pending_admin');
+      const dialog = getTopDialog();
+      if (!dialog) return;
+
+      const dialogText = normalizeText(dialog.textContent || '');
+      if (hasAnyText(dialogText, PENDING_APPROVAL_TEXTS)) {
+        throw new ShareFlowError('pending_admin', 'pending_admin');
       }
-      // Check if Post button is still there (post might have failed)
+
       const postBtn = findPostButton(dialog);
-      if (postBtn) {
-        throw new Error('Post failed (post dialog is still open after 10s)');
-      }
+      if (!postBtn && !hasAnyText(dialogText, ['โพสต์', 'post', 'แชร์', 'share'])) return;
+      await delay(500);
     }
 
-    // Assume success if we reach here (e.g. dialog might be closing or closed)
-  }
-
-  async function waitForDialogToClose(timeout) {
-    return new Promise((resolve) => {
-      const check = () => !document.querySelector('[role="dialog"]');
-      if (check()) { resolve(true); return; }
-
-      const obs = new MutationObserver(() => {
-        if (check()) { obs.disconnect(); resolve(true); }
-      });
-      obs.observe(document.body, { childList: true, subtree: true });
-      setTimeout(() => { obs.disconnect(); resolve(false); }, timeout);
-    });
+    const dialog = getTopDialog();
+    if (dialog && findPostButton(dialog)) {
+      throw new ShareFlowError('post_timeout', 'Post failed: dialog is still open after submit');
+    }
   }
 
   async function closeOpenDialogs() {
-    const closeButtons = document.querySelectorAll('[aria-label="ปิด"],[aria-label="Close"]');
-    for (const btn of closeButtons) {
-      simulateClick(btn);
-      await delay(500);
+    const rateLimitDialog = detectRateLimitDialog();
+    if (rateLimitDialog) {
+      await clickCancelOrClose(rateLimitDialog);
+      return;
     }
-    // Press Escape as fallback
+
+    const dialogs = getVisibleLayers('[role="dialog"]').reverse();
+    for (const dialog of dialogs) {
+      await clickCancelOrClose(dialog);
+      await delay(350);
+    }
+
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
     await delay(500);
+  }
+
+  // ---------------------
+  // Rate-limit / skip handling
+  // ---------------------
+  async function assertNotRateLimited(stage) {
+    const dialog = detectRateLimitDialog();
+    if (!dialog) return;
+
+    log(`Rate limit detected during "${stage}". Cancelling dialog and skipping this group.`);
+    await clickCancelOrClose(dialog);
+    throw new ShareFlowError('rate_limited', 'rate_limited');
+  }
+
+  function detectRateLimitDialog() {
+    return getVisibleLayers('[role="dialog"], [role="alertdialog"]')
+      .find((dialog) => hasAnyText(dialog.textContent || '', RATE_LIMIT_TEXTS)) || null;
+  }
+
+  async function clickCancelOrClose(container) {
+    const button = findDialogAction(container, ['ยกเลิก', 'cancel', 'ตกลง', 'ok', 'ปิด', 'close']);
+    if (button) {
+      simulateClick(button);
+      await delay(500);
+      return true;
+    }
+
+    const closeButton = container.querySelector('[aria-label="ปิด"], [aria-label="Close"], [aria-label*="close" i]');
+    if (closeButton && isVisible(closeButton)) {
+      simulateClick(closeButton);
+      await delay(500);
+      return true;
+    }
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
+    await delay(500);
+    return false;
+  }
+
+  function findDialogAction(container, labels) {
+    const buttons = [...container.querySelectorAll('[role="button"], button')]
+      .filter(btn => isVisible(btn) && !isDisabled(btn));
+    return buttons.find((btn) => hasExactElementLabel(btn, labels)) || null;
   }
 
   // ---------------------
   // DOM Utilities
   // ---------------------
   function waitForElement(selector, timeout = 5000) {
-    return new Promise((resolve) => {
-      const el = document.querySelector(selector);
-      if (el) { resolve(el); return; }
+    return waitForElementByCheck(() => document.querySelector(selector), timeout);
+  }
 
-      const obs = new MutationObserver(() => {
-        const found = document.querySelector(selector);
-        if (found) { obs.disconnect(); resolve(found); }
-      });
-      obs.observe(document.body, { childList: true, subtree: true });
-      setTimeout(() => { obs.disconnect(); resolve(null); }, timeout);
+  function waitForElementByCheck(check, timeout = 5000, interval = 180) {
+    return new Promise((resolve) => {
+      const startedAt = Date.now();
+      let observer = null;
+      let timer = null;
+
+      const finish = (value) => {
+        if (observer) observer.disconnect();
+        if (timer) clearInterval(timer);
+        resolve(value);
+      };
+
+      const runCheck = () => {
+        const value = check();
+        if (value) {
+          finish(value);
+          return true;
+        }
+        if (Date.now() - startedAt >= timeout) {
+          finish(null);
+          return true;
+        }
+        return false;
+      };
+
+      if (runCheck()) return;
+
+      observer = new MutationObserver(runCheck);
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true });
+      timer = setInterval(runCheck, interval);
     });
   }
 
-  function findInContainer(container, texts, tags) {
-    for (const tag of tags) {
-      const els = container.querySelectorAll(tag);
-      for (const el of els) {
-        const text = el.textContent?.trim() || '';
-        const normalizedText = text.toLowerCase();
-        
-        // Match if text exactly equals, starts with, ends with, or contains any of the target texts (case-insensitive)
-        const isMatched = texts.some(t => {
-          const lowerT = t.toLowerCase();
-          return normalizedText === lowerT || 
-                 normalizedText.includes(lowerT) || 
-                 normalizedText.startsWith(lowerT + '\n') || 
-                 normalizedText.endsWith('\n' + lowerT);
-        });
-
-        if (isMatched) {
-          if (isClickable(el) || el.closest('[role="button"],[tabindex]')) return el;
-        }
-      }
-    }
-    return null;
+  function getTopDialog() {
+    return getTopLayer('[role="dialog"], [role="alertdialog"]');
   }
 
-  function isClickable(el) {
-    const tag = el.tagName?.toLowerCase();
-    const role = el.getAttribute('role');
-    const tabIndex = el.getAttribute('tabindex');
-    return tag === 'button' || tag === 'a' || role === 'button' || tabIndex !== null;
+  function getTopLayer(selector) {
+    const layers = getVisibleLayers(selector);
+    return layers[layers.length - 1] || null;
+  }
+
+  function getVisibleLayers(selector) {
+    return [...document.querySelectorAll(selector)]
+      .filter(isVisible)
+      .sort((a, b) => {
+        const depthA = getDepth(a);
+        const depthB = getDepth(b);
+        if (depthA !== depthB) return depthA - depthB;
+        return area(a) - area(b);
+      });
+  }
+
+  function getDepth(el) {
+    let depth = 0;
+    let node = el;
+    while (node?.parentElement) {
+      depth += 1;
+      node = node.parentElement;
+    }
+    return depth;
+  }
+
+  function isInsideDialog(el) {
+    return Boolean(el.closest('[role="dialog"], [role="alertdialog"], [role="menu"]'));
+  }
+
+  function isVisible(el) {
+    if (!el || !(el instanceof Element)) return false;
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    return rect.width > 4 &&
+      rect.height > 4 &&
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      style.opacity !== '0';
+  }
+
+  function isDisabled(el) {
+    return el.disabled ||
+      el.getAttribute('aria-disabled') === 'true' ||
+      el.getAttribute('disabled') !== null ||
+      el.closest('[aria-disabled="true"]');
+  }
+
+  function area(el) {
+    const rect = el.getBoundingClientRect();
+    return rect.width * rect.height;
+  }
+
+  function getClickableAncestor(el) {
+    if (!el) return null;
+    return el.closest('[role="button"], button, a, [tabindex="0"], [role="menuitem"], [role="option"], [role="listitem"]') || el;
+  }
+
+  function normalizedElementText(el) {
+    if (!el) return '';
+    return normalizeText([
+      el.textContent,
+      el.getAttribute('aria-label'),
+      el.getAttribute('placeholder'),
+      el.getAttribute('title'),
+    ].filter(Boolean).join(' '));
+  }
+
+  function normalizeText(value) {
+    return (value || '')
+      .replace(/\u200b/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+
+  function exactTextMatch(value, options) {
+    const normalized = normalizeText(value);
+    return options.some(option => normalized === normalizeText(option));
+  }
+
+  function hasExactElementLabel(el, options) {
+    return [
+      el.textContent,
+      el.getAttribute('aria-label'),
+      el.getAttribute('title'),
+    ].some(value => exactTextMatch(value || '', options));
+  }
+
+  function hasAnyText(value, texts) {
+    const normalized = normalizeText(value);
+    return texts.some(text => normalized.includes(normalizeText(text)));
   }
 
   function simulateClick(el) {
-    el.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
-    el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    const target = getClickableAncestor(el) || el;
+    target.scrollIntoView({ block: 'center', inline: 'center' });
+    target.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+    target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+    target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    target.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
+    target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
   }
 
   function setNativeValue(input, value) {
     try {
-      const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+      const prototype = input instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
+      const desc = Object.getOwnPropertyDescriptor(prototype, 'value');
       desc.set.call(input, value);
     } catch {
       input.value = value;
@@ -507,12 +734,15 @@
   }
 
   async function typeIntoInput(input, text) {
-    // Set via native setter to trigger React
-    setNativeValue(input, text);
-    await delay(300);
-    // Also simulate keydown/up for the last char to trigger search
-    input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+    input.focus();
+    for (const char of text) {
+      const nextValue = input.value + char;
+      setNativeValue(input, nextValue);
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keypress', { key: char, bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
+      await delay(randomBetween(12, 35));
+    }
   }
 
   function delay(ms) {
@@ -534,6 +764,6 @@
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {
-    setTimeout(init, 1500); // Give the React app time to render
+    setTimeout(init, 1500);
   }
 })();
