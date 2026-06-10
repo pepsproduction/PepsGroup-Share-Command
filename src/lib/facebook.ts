@@ -30,6 +30,7 @@ interface FacebookHelperCommand {
   requestId: string;
   groupUrl: string;
   caption: string;
+  images?: Array<{ name: string; data: string }>;
   createdAt: number;
   openMode: 'helper' | 'already-opened';
 }
@@ -173,7 +174,8 @@ export function openInReusableTab(url: string, targetName: string = DEFAULT_FB_S
 function buildFacebookHelperCommand(
   caption: string,
   groupUrl: string,
-  openMode: FacebookHelperCommand['openMode']
+  openMode: FacebookHelperCommand['openMode'],
+  images?: Array<{ name: string; data: string }>
 ): FacebookHelperCommand {
   const normalizedGroupUrl = isFbGroupUrl(groupUrl) ? normalizeFbGroupUrl(groupUrl) : groupUrl;
   const requestId = `pgsc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -184,6 +186,7 @@ function buildFacebookHelperCommand(
     requestId,
     groupUrl: normalizedGroupUrl,
     caption,
+    images,
     createdAt: Date.now(),
     openMode,
   };
@@ -282,10 +285,11 @@ function queueCaptionCommand(command: FacebookHelperCommand): Promise<boolean> {
 export async function openGroupAndSendCaptionToHelper(
   caption: string,
   groupUrl: string,
-  targetName: string = DEFAULT_FB_SHARE_TAB_NAME
+  targetName: string = DEFAULT_FB_SHARE_TAB_NAME,
+  images?: Array<{ name: string; data: string }>
 ): Promise<{ opened: boolean; openedByHelper: boolean }> {
   const helperReady = isFacebookHelperAvailable();
-  const command = buildFacebookHelperCommand(caption, groupUrl, helperReady ? 'helper' : 'already-opened');
+  const command = buildFacebookHelperCommand(caption, groupUrl, helperReady ? 'helper' : 'already-opened', images);
   let openedByWindow = false;
 
   if (!helperReady) {

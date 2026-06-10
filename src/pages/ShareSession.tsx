@@ -290,7 +290,12 @@ export function ShareSession() {
   async function handleOpenAndCopy() {
     if (!currentCaption || !currentGroup) return;
     const copyPromise = copyTextToClipboard(currentCaption);
-    const openResult = await openGroupAndSendCaptionToHelper(currentCaption, currentGroup.url, 'pgsc_share_session_fb_tab');
+    
+    const images = includeImage 
+      ? (currentPost?.images || (currentPost?.imageUrl ? [{ name: 'legacy_image.png', data: currentPost.imageUrl }] : undefined))
+      : undefined;
+
+    const openResult = await openGroupAndSendCaptionToHelper(currentCaption, currentGroup.url, 'pgsc_share_session_fb_tab', images);
 
     copyPromise
       .then(() => {
