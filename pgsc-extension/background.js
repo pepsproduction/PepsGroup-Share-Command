@@ -94,13 +94,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'PGSC_SESSION_DONE') {
     // All groups processed
-    handleSessionDone(message.results);
-    sendResponse({ ok: true });
+    handleSessionDone(message.results).then(() => sendResponse({ ok: true }));
+    return true;
   }
 
   if (message.type === 'PGSC_LOG') {
-    writeLog(message.text);
-    sendResponse({ ok: true });
+    writeLog(message.text).then(() => sendResponse({ ok: true }));
+    return true;
   }
 
   if (message.type === 'PGSC_NAVIGATE_POST') {
@@ -110,9 +110,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           writeLog(`เปิดหน้าโพสต์ถัดไปไม่สำเร็จ: ${err.message}`);
         });
       }
+      sendResponse({ ok: true });
     });
-    sendResponse({ ok: true });
-    return;
+    return true;
   }
 });
 
@@ -122,6 +122,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function handleStartSession(message) {
   const { postUrl, groups, caption, sessionId } = message;
 
+  if (!postUrl || !Array.isArray(groups) || groups.length === 0 || !sessionId) {
+    throw new Error('Invalid session payload: missing postUrl, groups, or sessionId');
+  }
+
   const session = {
     sessionId,
     postUrl,
@@ -129,39 +133,40 @@ async function handleStartSession(message) {
     caption,
     currentIndex: 0,
     results: [],
-    status: 'starting',
+    status: 'running',
     startedAt: Date.now(),
   };
 
-  // Clear logs and initialize
   const initMsg = `เริ่ม Session อัตโนมัติไปยัง ${groups.length} กลุ่ม`;
-  await chrome.storage.local.set({
-    pgsc_session: session,
-    pgsc_logs: [`[${new Date().toLocaleTimeString()}] ${initMsg}`]
-  });
+  const initialLogs = [`[${new Date().toLocaleTimeString()}] ${initMsg}`];
 
-  // Open or reuse a Facebook tab
+  // Open or reuse a Facebook tab (across all windows)
   const [fbTab] = await chrome.tabs.query({
     url: ['https://www.facebook.com/*', 'https://web.facebook.com/*'],
-    currentWindow: true,
   });
 
   let targetTab;
   if (fbTab) {
-    await writeLog('ตรวจพบแท็บ Facebook เดิม ทำการรีโหลดเปิดหน้าโพสต์เป้าหมาย');
+    initialLogs.push(`[${new Date().toLocaleTimeString()}] ตรวจพบแท็บ Facebook เดิม ทำการรีโหลดเปิดหน้าโพสต์เป้าหมาย`);
     await chrome.tabs.update(fbTab.id, { url: postUrl, active: true });
     targetTab = fbTab;
   } else {
-    await writeLog('สร้างแท็บ Facebook ใหม่เพื่อเริ่มแชร์');
+    initialLogs.push(`[${new Date().toLocaleTimeString()}] สร้างแท็บ Facebook ใหม่เพื่อเริ่มแชร์`);
     targetTab = await chrome.tabs.create({ url: postUrl, active: true });
   }
 
+  initialLogs.push(`[${new Date().toLocaleTimeString()}] Session เริ่มทำงาน: กำลังแชร์ไปยังกลุ่มที่ 1: ${groups[0].name}`);
+
   await chrome.storage.local.set({
-    pgsc_session: { ...session, status: 'running' },
+    pgsc_session: session,
+    pgsc_logs: initialLogs,
     pgsc_fb_tab_id: targetTab.id,
   });
 
-  await writeLog(`Session เริ่มทำงาน: กำลังแชร์ไปยังกลุ่มที่ 1: ${groups[0].name}`);
+  console.log('[PGSC BG]', initMsg);
+  console.log('[PGSC BG]', fbTab ? 'ตรวจพบแท็บ Facebook เดิม ทำการรีโหลดเปิดหน้าโพสต์เป้าหมาย' : 'สร้างแท็บ Facebook ใหม่เพื่อเริ่มแชร์');
+  console.log('[PGSC BG]', `Session เริ่มทำงาน: กำลังแชร์ไปยังกลุ่มที่ 1: ${groups[0].name}`);
+
   return { ok: true, sessionId, tabId: targetTab.id };
 }
 
@@ -216,22 +221,26 @@ async function handleFbReady(tab, sendResponse) {
 }
 
 async function handleResult(result, tab) {
-  const { pgsc_session } = await chrome.storage.local.get('pgsc_session');
-  if (!pgsc_session) return { ok: false };
+  const data = await chrome.storage.local.get('pgsc_session');
+  const fresh = data.pgsc_session;
+  if (!fresh) return { ok: false };
 
-  pgsc_session.results.push(result);
-  pgsc_session.currentIndex += 1;
+  const updated = {
+    ...fresh,
+    results: [...fresh.results, result],
+    currentIndex: fresh.currentIndex + 1,
+  };
 
-  const isDone = pgsc_session.currentIndex >= pgsc_session.groups.length;
-  pgsc_session.status = isDone ? 'completed' : 'running';
+  const isDone = updated.currentIndex >= updated.groups.length;
+  updated.status = isDone ? 'completed' : 'running';
 
-  await chrome.storage.local.set({ pgsc_session });
+  await chrome.storage.local.set({ pgsc_session: updated });
 
   const statusEmoji = result.status === 'posted' ? '✅ สำเร็จ'
                      : result.status === 'pending_admin' ? '⏳ รอแอดมินอนุมัติ'
                      : result.status === 'skipped' ? `⏭️ ข้าม (${result.reason || 'ไม่พบกลุ่ม'})`
                      : `❌ ล้มเหลว (${result.reason || 'ไม่ทราบสาเหตุ'})`;
-  await writeLog(`[กลุ่มที่ ${pgsc_session.currentIndex}/${pgsc_session.groups.length}] ${result.group} -> ${statusEmoji}`);
+  await writeLog(`[กลุ่มที่ ${updated.currentIndex}/${updated.groups.length}] ${result.group} -> ${statusEmoji}`);
 
   // Push real-time result to web app
   await pushToWebApp({ type: 'PGSC_RESULT', data: result });
@@ -241,12 +250,12 @@ async function handleResult(result, tab) {
     await pushToWebApp({
       type: 'PGSC_SESSION_DONE',
       data: {
-        results: pgsc_session.results,
-        sessionId: pgsc_session.sessionId,
+        results: updated.results,
+        sessionId: updated.sessionId,
       },
     });
   } else {
-    const nextGroup = pgsc_session.groups[pgsc_session.currentIndex];
+    const nextGroup = updated.groups[updated.currentIndex];
     await writeLog(`เตรียมเปิดกลุ่มถัดไป: ${nextGroup.name}`);
   }
 
@@ -295,8 +304,14 @@ function normalizeUrlForCompare(url) {
 // ---------------------
 async function pushToWebApp(message) {
   try {
-    const tabs = await chrome.tabs.query({ url: ALLOWED_ORIGINS.flatMap(o => [o + '/*']) });
-    for (const tab of tabs) {
+    const tabs = await chrome.tabs.query({});
+    const webAppTabs = tabs.filter(tab => {
+      const url = tab.url || '';
+      return ALLOWED_ORIGINS.some(origin => url.startsWith(origin)) ||
+             /^https?:\/\/localhost(:\d+)?\//.test(url);
+    });
+
+    for (const tab of webAppTabs) {
       try {
         await chrome.tabs.sendMessage(tab.id, message);
       } catch {

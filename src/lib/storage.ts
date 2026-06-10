@@ -319,23 +319,50 @@ function optionalArray(data: Record<string, unknown>, key: string): unknown[] | 
   return data[key];
 }
 
+function isValidItem(item: unknown, requiredKeys: string[]): boolean {
+  if (!isRecord(item)) return false;
+  return requiredKeys.every((key) => key in item && item[key] !== undefined && item[key] !== null);
+}
+
 export function importAllData(data: unknown): void {
   if (!isRecord(data)) throw new Error('Import data must be an object');
 
-  const groups = optionalArray(data, 'groups') as Group[] | undefined;
-  const posts = optionalArray(data, 'posts') as CaptionPost[] | undefined;
-  const campaigns = optionalArray(data, 'campaigns') as Campaign[] | undefined;
-  const queue = optionalArray(data, 'queue') as ShareQueueItem[] | undefined;
-  const notifications = optionalArray(data, 'notifications') as NotificationItem[] | undefined;
-  const leads = optionalArray(data, 'leads') as Lead[] | undefined;
+  const groups = optionalArray(data, 'groups');
+  const posts = optionalArray(data, 'posts');
+  const campaigns = optionalArray(data, 'campaigns');
+  const queue = optionalArray(data, 'queue');
+  const notifications = optionalArray(data, 'notifications');
+  const leads = optionalArray(data, 'leads');
 
-  if (groups) groupStorage.save(groups);
-  if (posts) postStorage.save(posts);
-  if (campaigns) campaignStorage.save(campaigns);
-  if (queue) queueStorage.save(queue);
-  if (notifications) notificationStorage.save(notifications);
-  if (leads) leadStorage.save(leads);
-  if (isRecord(data.settings)) settingsStorage.save(normalizeSettings(data.settings));
+  if (groups && !groups.every((g) => isValidItem(g, ['id', 'name', 'url']))) {
+    throw new Error('Invalid format for groups array');
+  }
+  if (posts && !posts.every((p) => isValidItem(p, ['id', 'title']))) {
+    throw new Error('Invalid format for posts array');
+  }
+  if (campaigns && !campaigns.every((c) => isValidItem(c, ['id', 'name']))) {
+    throw new Error('Invalid format for campaigns array');
+  }
+  if (queue && !queue.every((q) => isValidItem(q, ['id', 'groupId']))) {
+    throw new Error('Invalid format for queue array');
+  }
+  if (notifications && !notifications.every((n) => isValidItem(n, ['id', 'title']))) {
+    throw new Error('Invalid format for notifications array');
+  }
+  if (leads && !leads.every((l) => isValidItem(l, ['id']))) {
+    throw new Error('Invalid format for leads array');
+  }
+
+  if (groups) groupStorage.save(groups as Group[]);
+  if (posts) postStorage.save(posts as CaptionPost[]);
+  if (campaigns) campaignStorage.save(campaigns as Campaign[]);
+  if (queue) queueStorage.save(queue as ShareQueueItem[]);
+  if (notifications) notificationStorage.save(notifications as NotificationItem[]);
+  if (leads) leadStorage.save(leads as Lead[]);
+
+  if (isRecord(data.settings)) {
+    settingsStorage.save(normalizeSettings(data.settings as Partial<AppSettings>));
+  }
 }
 
 export function clearAllData(): void {

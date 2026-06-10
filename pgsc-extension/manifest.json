@@ -8,12 +8,18 @@
     "https://www.facebook.com/*",
     "https://web.facebook.com/*",
     "https://pepsproduction.github.io/*",
-    "http://localhost:*/*"
+    "http://localhost:5173/*",
+    "http://localhost:5174/*",
+    "http://localhost:4173/*",
+    "http://localhost:3000/*"
   ],
   "externally_connectable": {
     "matches": [
       "https://pepsproduction.github.io/*",
-      "http://localhost:*/*"
+      "http://localhost:5173/*",
+      "http://localhost:5174/*",
+      "http://localhost:4173/*",
+      "http://localhost:3000/*"
     ]
   },
   "background": {
@@ -34,7 +40,10 @@
     {
       "matches": [
         "https://pepsproduction.github.io/*",
-        "http://localhost:*/*"
+        "http://localhost:5173/*",
+        "http://localhost:5174/*",
+        "http://localhost:4173/*",
+        "http://localhost:3000/*"
       ],
       "js": ["pgsc_bridge.js"],
       "run_at": "document_start"

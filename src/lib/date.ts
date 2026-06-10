@@ -24,6 +24,7 @@ export function formatRelative(iso: string | null | undefined): string {
   const d = new Date(iso);
   const now = new Date();
   const diff = now.getTime() - d.getTime();
+  if (diff < 0) return formatDateTime(iso);
   const days = Math.floor(diff / 86400000);
   const hours = Math.floor(diff / 3600000);
   const minutes = Math.floor(diff / 60000);

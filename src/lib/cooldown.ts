@@ -5,8 +5,10 @@ export function getGroupCooldownDays(group: Group): number {
   return Math.max(0, Math.floor(days));
 }
 
+export const NEVER_POSTED_ELAPSED = Number.MAX_SAFE_INTEGER;
+
 export function getCooldownElapsedDays(group: Group): number {
-  if (!group.lastPostedAt) return 999;
+  if (!group.lastPostedAt) return NEVER_POSTED_ELAPSED;
 
   const posted = new Date(group.lastPostedAt);
   const postedDate = new Date(posted.getFullYear(), posted.getMonth(), posted.getDate());

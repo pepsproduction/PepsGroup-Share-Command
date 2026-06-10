@@ -49,10 +49,13 @@ function AppContent() {
       settings,
       lastBackupAt: localStorage.getItem(BACKUP_MARKER_KEY),
     });
-    if (reminders.length === 0) return;
+    if (reminders.length === 0) {
+      localStorage.setItem(runKey, '1');
+      return;
+    }
 
-    localStorage.setItem(runKey, '1');
     const timer = window.setTimeout(() => {
+      localStorage.setItem(runKey, '1');
       reminders.forEach((reminder) => {
         addNotification(reminder.severity, reminder.title, reminder.message);
         if (

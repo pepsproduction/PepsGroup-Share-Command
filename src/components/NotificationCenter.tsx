@@ -23,10 +23,17 @@ const ICON_MAP: Record<NotificationType, string> = {
 };
 
 function ToastItem({ toast, onClose }: { toast: ToastData; onClose: () => void }) {
+  const onCloseRef = useRef(onClose);
   useEffect(() => {
-    const timer = setTimeout(onClose, 4000);
-    return () => clearTimeout(timer);
+    onCloseRef.current = onClose;
   }, [onClose]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      onCloseRef.current();
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, []);
 
   return (
     <div className={`toast toast-${toast.type}`} role="alert" aria-live="polite">

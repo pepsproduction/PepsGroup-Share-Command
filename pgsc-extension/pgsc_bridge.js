@@ -18,8 +18,6 @@
   } catch (e) {
     console.error('PGSC Helper: Failed to inject installation signal', e);
   }
-  window.__PGSC_EXTENSION_INSTALLED__ = true;
-
   // ---------------------
   // Forward messages from web app → background
   // ---------------------
@@ -28,8 +26,26 @@
     if (event.data?.source !== 'PGSC_WEB_APP') return;
 
     const { requestId, ...rest } = event.data;
+    let responded = false;
+
+    // Timeout to prevent hanging if background script fails to reply
+    const timeoutId = setTimeout(() => {
+      if (!responded) {
+        responded = true;
+        window.postMessage({
+          source: 'PGSC_EXTENSION_BRIDGE',
+          requestId,
+          ok: false,
+          error: 'Extension response timeout',
+        }, '*');
+      }
+    }, 12000);
 
     chrome.runtime.sendMessage(rest, (response) => {
+      clearTimeout(timeoutId);
+      if (responded) return;
+      responded = true;
+
       if (chrome.runtime.lastError) {
         window.postMessage({
           source: 'PGSC_EXTENSION_BRIDGE',

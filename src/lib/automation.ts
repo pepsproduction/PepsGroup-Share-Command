@@ -36,7 +36,7 @@ export const DEFAULT_AUTOMATION_SETTINGS: AutomationSettings = {
   smartQueueEnabled: true,
   skipBlacklisted: true,
   cooldownEnabled: false,
-  skipCooldown: true,
+  skipCooldown: false,
   skipNoLinkGroups: true,
   remindersEnabled: true,
   browserNotificationsEnabled: false,
@@ -50,7 +50,9 @@ function queuePriority(group: Group): number {
   const quality = QUALITY_SCORE[group.qualityScore] ?? 0;
   const adminPenalty = group.requiresAdminApproval ? 4 : 0;
   const noLinkPenalty = group.allowLinks ? 0 : 8;
-  const cooldownAge = Math.min(getCooldownElapsedDays(group), 60) / 10;
+  const cooldownAge = group.lastPostedAt
+    ? Math.min(getCooldownElapsedDays(group), 60) / 10
+    : 0;
   return quality * 10 + cooldownAge - adminPenalty - noLinkPenalty;
 }
 
@@ -80,15 +82,15 @@ export function planSmartQueue(args: {
         skipped.push({ group, reason: 'มีคิวที่ยังไม่จบในแคมเปญนี้อยู่แล้ว' });
         return;
       }
-      if (settings.smartQueueEnabled && settings.skipBlacklisted && group.isBlacklisted) {
+      if (settings.skipBlacklisted && group.isBlacklisted) {
         skipped.push({ group, reason: 'อยู่ใน blacklist' });
         return;
       }
-      if (settings.smartQueueEnabled && settings.cooldownEnabled && settings.skipCooldown && isGroupInCooldown(group, true)) {
+      if (settings.cooldownEnabled && settings.skipCooldown && isGroupInCooldown(group, true)) {
         skipped.push({ group, reason: `ยังอยู่ใน cooldown อีก ${getCooldownLeft(group, true)} วัน` });
         return;
       }
-      if (settings.smartQueueEnabled && settings.skipNoLinkGroups && args.post?.link && !group.allowLinks) {
+      if (settings.skipNoLinkGroups && args.post?.link && !group.allowLinks) {
         skipped.push({ group, reason: 'กลุ่มนี้ห้ามแนบลิงก์' });
         return;
       }
@@ -172,7 +174,7 @@ export function collectAutomationReminders(args: {
   const dueToday = args.queue.filter((item) => {
     if (item.status !== 'not_started' || !item.scheduledAt) return false;
     const date = new Date(item.scheduledAt);
-    return date.toDateString() === now.toDateString();
+    return date.toDateString() === now.toDateString() && date.getTime() >= now.getTime();
   });
   if (dueToday.length > 0) {
     reminders.push({

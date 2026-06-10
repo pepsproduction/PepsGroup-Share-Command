@@ -28,6 +28,9 @@ interface SidebarProps {
 }
 
 export function Sidebar({ currentPage, onNavigate, isOpen }: SidebarProps) {
+  const isExtInstalled =
+    (window as unknown as { __PGSC_EXTENSION_INSTALLED__?: boolean }).__PGSC_EXTENSION_INSTALLED__ === true;
+
   return (
     <aside className={`sidebar ${isOpen ? 'open' : ''}`} aria-label="เมนูหลัก">
       <div className="sidebar-brand">
@@ -61,25 +64,15 @@ export function Sidebar({ currentPage, onNavigate, isOpen }: SidebarProps) {
 
       <div className="sidebar-footer">
         <div className="system-status">
-          {(() => {
-            const isExtInstalled = (window as unknown as { __PGSC_EXTENSION_INSTALLED__?: boolean }).__PGSC_EXTENSION_INSTALLED__ === true;
-            return (
-              <>
-                <span 
-                  className="status-dot" 
-                  style={{ backgroundColor: isExtInstalled ? '#4CAF50' : 'var(--status-pending)' }} 
-                  aria-hidden="true" 
-                />
-                <span>{isExtInstalled ? '🤖 Extension Ready' : 'Manual Share Only'}</span>
-              </>
-            );
-          })()}
+          <span 
+            className="status-dot" 
+            style={{ backgroundColor: isExtInstalled ? '#4CAF50' : 'var(--status-pending)' }} 
+            aria-hidden="true" 
+          />
+          <span>{isExtInstalled ? '🤖 Extension Ready' : 'Manual Share Only'}</span>
         </div>
         <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
-          {(() => {
-            const isExtInstalled = (window as unknown as { __PGSC_EXTENSION_INSTALLED__?: boolean }).__PGSC_EXTENSION_INSTALLED__ === true;
-            return isExtInstalled ? 'v1.1.0 · Auto Share Active' : 'v1.0.0 · No Auto-Post';
-          })()}
+          {isExtInstalled ? 'v1.1.0 · Auto Share Active' : 'v1.0.0 · No Auto-Post'}
         </div>
       </div>
     </aside>

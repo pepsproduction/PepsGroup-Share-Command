@@ -67,6 +67,8 @@
           startShare(response.group, response.caption, response.index, response.total);
         }
       });
+    }).catch(err => {
+      console.error('[PGSC Extension] init failed:', err);
     });
   }
 
@@ -131,26 +133,25 @@
       };
     }
 
-    chrome.runtime.sendMessage({ type: 'PGSC_RESULT', result }, (response) => {
-      if (chrome.runtime.lastError) {
-        RUNNING = false;
-        return;
-      }
-      const isDone = response?.isDone;
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'PGSC_RESULT', result });
       RUNNING = false;
+      const isDone = response?.isDone;
 
       if (!isDone) {
         const delayMs = result.reason === 'rate_limited'
           ? randomBetween(1000, 2200)
           : randomBetween(5000, 9000);
         log(`Waiting ${Math.round(delayMs / 1000)}s before next group...`);
-        setTimeout(() => {
-          chrome.runtime.sendMessage({ type: 'PGSC_NAVIGATE_POST' });
-        }, delayMs);
+        await delay(delayMs);
+        chrome.runtime.sendMessage({ type: 'PGSC_NAVIGATE_POST' });
       } else {
         log('All groups done!');
       }
-    });
+    } catch (err) {
+      RUNNING = false; // Reset status on failure to send message
+      log(`Failed to report result to background: ${err.message}`);
+    }
   }
 
   // ---------------------
@@ -210,7 +211,7 @@
       .sort((a, b) => area(b) - area(a));
 
     const feedUnits = [...document.querySelectorAll('[data-pagelet^="FeedUnit"], [data-pagelet="MainFeed"]')]
-      .filter(isVisible)
+      .filter(fu => isVisible(fu) && !articles.some(a => fu.contains(a)))
       .sort((a, b) => area(b) - area(a));
 
     return [...articles, ...feedUnits, document.body];
@@ -314,7 +315,12 @@
     input.focus();
     await delay(randomBetween(200, 450));
     setNativeValue(input, '');
-    await delay(randomBetween(120, 260));
+    await delay(randomBetween(200, 400));
+    if (input.value !== '') {
+      input.select();
+      document.execCommand('delete');
+      await delay(200);
+    }
     await typeIntoInput(input, groupName);
     await assertNotRateLimited('ค้นหากลุ่ม');
 
@@ -399,7 +405,11 @@
     const pasteSuccess = await pasteIntoEditor(editor, text);
     if (!pasteSuccess) {
       const cmdSuccess = document.execCommand('insertText', false, text);
-      if (!cmdSuccess) await typeChars(editor, text);
+      if (!cmdSuccess) {
+        await typeChars(editor, text);
+        await delay(randomBetween(450, 900));
+        return;
+      }
     }
 
     editor.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: text, bubbles: true }));
@@ -489,15 +499,44 @@
       await assertNotRateLimited('ตรวจผลลัพธ์');
 
       const dialog = getTopDialog();
-      if (!dialog) return;
+      if (dialog) {
+        const dialogText = normalizeText(dialog.textContent || '');
+        if (hasAnyText(dialogText, PENDING_APPROVAL_TEXTS)) {
+          throw new ShareFlowError('pending_admin', 'pending_admin');
+        }
 
-      const dialogText = normalizeText(dialog.textContent || '');
-      if (hasAnyText(dialogText, PENDING_APPROVAL_TEXTS)) {
-        throw new ShareFlowError('pending_admin', 'pending_admin');
+        // Check for error messages inside dialog
+        const errorTexts = ['something went wrong', 'เกิดข้อผิดพลาด', 'error', 'ไม่สำเร็จ'];
+        if (hasAnyText(dialogText, errorTexts)) {
+          throw new ShareFlowError('post_error', `Facebook error: ${dialogText.slice(0, 100)}`);
+        }
+
+        const postBtn = findPostButton(dialog);
+        if (!postBtn && !hasAnyText(dialogText, ['โพสต์', 'post', 'แชร์', 'share'])) return;
       }
 
-      const postBtn = findPostButton(dialog);
-      if (!postBtn && !hasAnyText(dialogText, ['โพสต์', 'post', 'แชร์', 'share'])) return;
+      // Check for success toast
+      const toast = document.querySelector('[role="alert"], [data-testid="toast"]');
+      if (toast) {
+        const toastText = normalizeText(toast.textContent || '');
+        if (hasAnyText(toastText, ['สำเร็จ', 'shared', 'posted', 'แชร์แล้ว'])) {
+          return; // Definitive success
+        }
+      }
+
+      if (!dialog) {
+        // Dialog disappeared - wait briefly to see if any toast signals error, otherwise assume success
+        await delay(1500);
+        const postErrToast = document.querySelector('[role="alert"], [data-testid="toast"]');
+        if (postErrToast) {
+          const toastText = normalizeText(postErrToast.textContent || '');
+          if (hasAnyText(toastText, ['เกิดข้อผิดพลาด', 'error', 'ไม่สำเร็จ'])) {
+            throw new ShareFlowError('post_error', `Facebook error toast: ${postErrToast.textContent}`);
+          }
+        }
+        return;
+      }
+
       await delay(500);
     }
 
@@ -622,6 +661,9 @@
     return [...document.querySelectorAll(selector)]
       .filter(isVisible)
       .sort((a, b) => {
+        const zA = parseInt(window.getComputedStyle(a).zIndex) || 0;
+        const zB = parseInt(window.getComputedStyle(b).zIndex) || 0;
+        if (zA !== zB) return zA - zB;
         const depthA = getDepth(a);
         const depthB = getDepth(b);
         if (depthA !== depthB) return depthA - depthB;
@@ -655,10 +697,10 @@
   }
 
   function isDisabled(el) {
-    return el.disabled ||
+    return el.disabled === true ||
       el.getAttribute('aria-disabled') === 'true' ||
-      el.getAttribute('disabled') !== null ||
-      el.closest('[aria-disabled="true"]');
+      el.hasAttribute('disabled') ||
+      Boolean(el.closest('[aria-disabled="true"]'));
   }
 
   function area(el) {
@@ -735,9 +777,10 @@
 
   async function typeIntoInput(input, text) {
     input.focus();
+    let accumulated = '';
     for (const char of text) {
-      const nextValue = input.value + char;
-      setNativeValue(input, nextValue);
+      accumulated += char;
+      setNativeValue(input, accumulated);
       input.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
       input.dispatchEvent(new KeyboardEvent('keypress', { key: char, bubbles: true }));
       input.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
@@ -764,6 +807,6 @@
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {
-    setTimeout(init, 1500);
+    init();
   }
 })();

@@ -189,7 +189,14 @@ function buildFacebookHelperCommand(
   };
 }
 
+let activePingTimer: number | null = null;
+
 function pingRememberedFacebookTab(command: FacebookHelperCommand): void {
+  if (activePingTimer !== null) {
+    window.clearInterval(activePingTimer);
+    activePingTimer = null;
+  }
+
   try {
     if (!rememberedFbTab || rememberedFbTab.closed) return;
   } catch {
@@ -208,15 +215,23 @@ function pingRememberedFacebookTab(command: FacebookHelperCommand): void {
   };
 
   let attempts = 0;
-  const timer = window.setInterval(() => {
+  activePingTimer = window.setInterval(() => {
     attempts += 1;
     try {
       rememberedFbTab?.postMessage(payload, targetOrigin);
     } catch {
-      window.clearInterval(timer);
+      if (activePingTimer !== null) {
+        window.clearInterval(activePingTimer);
+        activePingTimer = null;
+      }
       return;
     }
-    if (attempts >= 18) window.clearInterval(timer);
+    if (attempts >= 18) {
+      if (activePingTimer !== null) {
+        window.clearInterval(activePingTimer);
+        activePingTimer = null;
+      }
+    }
   }, 700);
 }
 
@@ -323,10 +338,10 @@ export function parseFbGroupsFromHtml(html: string): Array<{ name: string; url: 
       const url = `https://www.facebook.com/groups/${groupId}/`;
       if (!seen.has(url)) {
         seen.add(url);
-        let name = a.innerText.trim();
+        let name = (a.textContent ?? '').trim();
         if (!name) {
           const span = a.querySelector('span');
-          if (span) name = span.innerText.trim();
+          if (span) name = (span.textContent ?? '').trim();
         }
         if (!name) {
           name = a.getAttribute('title')?.trim() || '';
@@ -337,7 +352,7 @@ export function parseFbGroupsFromHtml(html: string): Array<{ name: string; url: 
           let memberCount = '';
           let parent = a.parentElement;
           for (let i = 0; i < 3 && parent; i++) {
-            const text = parent.innerText || '';
+            const text = parent.textContent || '';
             const count = extractMemberCount(text);
             if (count) {
               memberCount = count;

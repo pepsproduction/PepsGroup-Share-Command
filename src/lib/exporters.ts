@@ -7,7 +7,7 @@ import { groupStorage } from './storage';
 function escapeCsv(val: string | number | boolean | null | undefined): string {
   if (val === null || val === undefined) return '';
   const str = String(val);
-  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+  if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
     return `"${str.replace(/"/g, '""')}"`;
   }
   return str;
@@ -53,7 +53,7 @@ export function exportQueueCsv(items: ShareQueueItem[], campaign?: Campaign): st
     ].map(escapeCsv).join(',');
   });
 
-  return [headers.join(','), ...rows].join('\n');
+  return [headers.join(','), ...rows].join('\r\n');
 }
 
 export function exportGroupsCsv(groups: Group[]): string {
@@ -77,7 +77,7 @@ export function exportGroupsCsv(groups: Group[]): string {
     g.rulesNote,
   ].map(escapeCsv).join(','));
 
-  return [headers.join(','), ...rows].join('\n');
+  return [headers.join(','), ...rows].join('\r\n');
 }
 
 export function exportLeadsCsv(leads: Lead[], groups: Group[], campaigns: Campaign[]): string {
@@ -99,7 +99,7 @@ export function exportLeadsCsv(leads: Lead[], groups: Group[], campaigns: Campai
     lead.contactNote,
   ].map(escapeCsv).join(','));
 
-  return [headers.join(','), ...rows].join('\n');
+  return [headers.join(','), ...rows].join('\r\n');
 }
 
 // =====================================================

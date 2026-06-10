@@ -27,13 +27,22 @@ export function Modal({ isOpen, onClose, title, children, size = 'md', footer }:
 
   if (!isOpen) return null;
 
-  const sizeClass = size === 'lg' ? 'modal-lg' : size === 'xl' ? 'modal-xl' : '';
+  const sizeClass =
+    size === 'sm' ? 'modal-sm' :
+    size === 'lg' ? 'modal-lg' :
+    size === 'xl' ? 'modal-xl' : '';
 
   return (
-    <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }} role="dialog" aria-modal>
+    <div
+      className="overlay"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="modal-title"
+    >
       <div className={`modal ${sizeClass}`}>
         <div className="modal-header">
-          <h2 className="modal-title">{title}</h2>
+          <h2 id="modal-title" className="modal-title">{title}</h2>
           <button className="modal-close" onClick={onClose} aria-label="ปิด">×</button>
         </div>
         <div>{children}</div>

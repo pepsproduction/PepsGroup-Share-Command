@@ -150,6 +150,11 @@ body {
   min-height: 0; /* Important for scrollable child */
 }
 
+#logs-section {
+  min-height: 0;
+  flex-shrink: 1;
+}
+
 .logs-box {
   flex: 1;
   background: #0f0f1b;
@@ -161,7 +166,7 @@ body {
   line-height: 1.5;
   color: #a8ffb2; /* Retro green terminal vibe */
   overflow-y: auto;
-  min-height: 120px;
+  min-height: 60px; /* Reduced min-height to prevent clipping footer in short panels */
 }
 
 .log-item {
