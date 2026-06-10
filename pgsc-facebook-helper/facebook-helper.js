@@ -321,32 +321,38 @@
   }
 
   let activeRequestId = '';
+  let isCommandProcessing = false;
 
   async function handleCommand(command) {
     if (!isValidCommand(command)) return;
+    if (isCommandProcessing) {
+      log('Another command is already processing. Skipping concurrent call.');
+      return;
+    }
     if (processedRequests.has(command.requestId) || activeRequestId === command.requestId) return;
     
-    // Check persistent storage to avoid duplicate processing across tabs/reloads
-    const alreadyProcessed = await isRequestProcessed(command.requestId);
-    if (alreadyProcessed) {
-      log(`Command ${command.requestId} was already successfully processed. Skipping duplicate call.`);
-      processedRequests.add(command.requestId); // Add to memory cache
-      return;
-    }
-
-    if (!isFreshCommand(command)) {
-      log(`Ignoring command ${command.requestId} because it is too old`);
-      return;
-    }
-    
-    if (!isCurrentGroup(command.groupUrl)) {
-      log(`Ignoring command ${command.requestId} because groupUrl mismatch. Current: ${window.location.href}, target: ${command.groupUrl}`);
-      return;
-    }
-
-    log(`Handling command: ${command.requestId}. Group: ${command.groupUrl}`);
+    isCommandProcessing = true;
     activeRequestId = command.requestId;
     try {
+      // Check persistent storage to avoid duplicate processing across tabs/reloads
+      const alreadyProcessed = await isRequestProcessed(command.requestId);
+      if (alreadyProcessed) {
+        log(`Command ${command.requestId} was already successfully processed. Skipping duplicate call.`);
+        processedRequests.add(command.requestId); // Add to memory cache
+        return;
+      }
+
+      if (!isFreshCommand(command)) {
+        log(`Ignoring command ${command.requestId} because it is too old`);
+        return;
+      }
+      
+      if (!isCurrentGroup(command.groupUrl)) {
+        log(`Ignoring command ${command.requestId} because groupUrl mismatch. Current: ${window.location.href}, target: ${command.groupUrl}`);
+        return;
+      }
+
+      log(`Handling command: ${command.requestId}. Group: ${command.groupUrl}`);
       const pasted = await openComposerAndPaste(command.caption, command.images);
       if (pasted) {
         log(`Command ${command.requestId} handled successfully. Saving processed state and clearing...`);
@@ -360,6 +366,7 @@
       logError(`Exception in handleCommand for ${command.requestId}:`, err);
     } finally {
       activeRequestId = '';
+      isCommandProcessing = false;
     }
   }
 
