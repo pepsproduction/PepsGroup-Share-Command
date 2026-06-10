@@ -169,14 +169,16 @@ export function ShareSession() {
       ? [firstPost.title, firstPost.caption, firstPost.link, firstPost.hashtags].filter(Boolean).join('\n\n').trim()
       : '';
 
-    const imageUrl = (includeImage && firstPost?.imageUrl) ? firstPost.imageUrl : undefined;
+    const images = includeImage 
+      ? (firstPost?.images || (firstPost?.imageUrl ? [{ name: 'legacy_image.png', data: firstPost.imageUrl }] : undefined))
+      : undefined;
 
     const result = await startExtensionSession({ 
       sessionId, 
       postUrl: autoPostUrl.trim(), 
       groups: extGroups, 
       caption,
-      imageUrl,
+      images,
       postMode
     });
     if (!result.ok) {
@@ -396,7 +398,8 @@ export function ShareSession() {
               const pendingItemsForImage = selectedCampaign ? queueStorage.getByCampaign(selectedCampaign).filter(q => q.status === 'not_started') : [];
               const firstItemForImage = pendingItemsForImage[0];
               const campaignPost = firstItemForImage ? posts.find(p => p.id === firstItemForImage.postId) : null;
-              const hasImage = !!campaignPost?.imageUrl;
+              const hasImage = !!campaignPost?.imageUrl || (campaignPost?.images && campaignPost.images.length > 0);
+              const imgCount = campaignPost?.images ? campaignPost.images.length : (campaignPost?.imageUrl ? 1 : 0);
               return (
                 <>
                   {hasImage && (
@@ -410,7 +413,7 @@ export function ShareSession() {
                         style={{ width: 'auto', cursor: 'pointer' }}
                       />
                       <label htmlFor="include-image-checkbox" style={{ cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: 'var(--text)' }}>
-                        🖼️ แนบรูปภาพที่บันทึกไว้ไปด้วย (Include Image)
+                        🖼️ แนบรูปภาพประกอบไปด้วย (Include Images: {imgCount} รูป)
                       </label>
                     </div>
                   )}

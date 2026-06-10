@@ -120,7 +120,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Session Management
 // ---------------------
 async function handleStartSession(message) {
-  const { postUrl, groups, caption, sessionId, imageUrl, postMode } = message;
+  const { postUrl, groups, caption, sessionId, imageUrl, images, postMode } = message;
 
   if (!postUrl || !Array.isArray(groups) || groups.length === 0 || !sessionId) {
     throw new Error('Invalid session payload: missing postUrl, groups, or sessionId');
@@ -132,6 +132,7 @@ async function handleStartSession(message) {
     groups,        // Array of { id, name, url }
     caption,
     imageUrl,
+    images,
     postMode,
     currentIndex: 0,
     results: [],
@@ -193,7 +194,7 @@ async function handleFbReady(tab, sendResponse) {
     return;
   }
 
-  const { groups, caption, currentIndex, imageUrl, postMode } = pgsc_session;
+  const { groups, caption, currentIndex, imageUrl, images, postMode } = pgsc_session;
 
   if (currentIndex >= groups.length) {
     sendResponse({ ok: false, reason: 'All groups done' });
@@ -218,6 +219,7 @@ async function handleFbReady(tab, sendResponse) {
     group,
     caption,
     imageUrl,
+    images,
     postMode,
     index: currentIndex,
     total: groups.length,

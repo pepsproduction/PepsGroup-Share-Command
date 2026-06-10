@@ -15,6 +15,7 @@ export interface ExtensionSessionRequest {
   groups: ExtensionShareGroup[];
   caption: string;
   imageUrl?: string;
+  images?: Array<{ name: string; data: string }>;
   postMode?: 'auto' | 'review';
 }
 

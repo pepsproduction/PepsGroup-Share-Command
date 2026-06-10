@@ -31,6 +31,11 @@ export interface CaptionVariant {
   caption: string;
 }
 
+export interface CaptionImage {
+  name: string;
+  data: string;
+}
+
 export interface CaptionPost {
   id: string;
   title: string;
@@ -40,6 +45,7 @@ export interface CaptionPost {
   note: string;
   variants: CaptionVariant[];
   imageUrl?: string;
+  images?: CaptionImage[];
   createdAt: string;
   updatedAt: string;
 }

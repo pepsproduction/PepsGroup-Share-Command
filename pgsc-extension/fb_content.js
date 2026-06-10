@@ -64,7 +64,7 @@
       chrome.runtime.sendMessage({ type: 'PGSC_FB_READY' }, (response) => {
         if (chrome.runtime.lastError) return;
         if (response?.ok && response?.group) {
-          startShare(response.group, response.caption, response.index, response.total, response.imageUrl, response.postMode);
+          startShare(response.group, response.caption, response.index, response.total, response.imageUrl, response.images, response.postMode);
         }
       });
     }).catch(err => {
@@ -86,7 +86,7 @@
         sendResponse({ ok: false, reason: 'Already running' });
         return;
       }
-      startShare(message.group, message.caption, message.index, message.total, message.imageUrl, message.postMode)
+      startShare(message.group, message.caption, message.index, message.total, message.imageUrl, message.images, message.postMode)
         .then(() => sendResponse({ ok: true }))
         .catch(err => sendResponse({ ok: false, error: err.message }));
       return true;
@@ -99,14 +99,14 @@
   // ---------------------
   // Main Share Orchestrator
   // ---------------------
-  async function startShare(group, caption, index, total, imageUrl, postMode) {
+  async function startShare(group, caption, index, total, imageUrl, images, postMode) {
     RUNNING = true;
-    SESSION = { group, caption, index, total, imageUrl, postMode };
+    SESSION = { group, caption, index, total, imageUrl, images, postMode };
     log(`[${index + 1}/${total}] Sharing to: ${group.name}`);
 
     let result;
     try {
-      await shareToGroup(group, caption, imageUrl, postMode);
+      await shareToGroup(group, caption, imageUrl, images, postMode);
       result = {
         group: group.name,
         groupId: group.id,
@@ -157,7 +157,7 @@
   // ---------------------
   // Core Share Workflow
   // ---------------------
-  async function shareToGroup(group, caption, imageUrl, postMode) {
+  async function shareToGroup(group, caption, imageUrl, images, postMode) {
     await runStep('เปิดลิงก์และกดลูกศรแชร์', () => clickShareButton());
     await runStep('เลือกเมนูแชร์ไปยังกลุ่ม', () => clickGroupsOption());
     await runStep(`ค้นหาและเลือกกลุ่ม: ${group.name}`, () => searchAndSelectGroup(group.name));
@@ -166,8 +166,15 @@
       await runStep('วางแคปชั่นในช่องโพสต์', () => insertCaption(caption.trim()));
     }
 
-    if (imageUrl && imageUrl.trim()) {
-      await runStep('อัปโหลดรูปภาพแนบ', () => uploadPostImage(imageUrl));
+    let uploadImages = [];
+    if (Array.isArray(images) && images.length > 0) {
+      uploadImages = images;
+    } else if (imageUrl && imageUrl.trim()) {
+      uploadImages = [{ name: 'legacy_image.png', data: imageUrl }];
+    }
+
+    if (uploadImages.length > 0) {
+      await runStep(`อัปโหลดรูปภาพแนบ (${uploadImages.length} รูป)`, () => uploadPostImages(uploadImages));
     }
 
     if (postMode === 'review') {
@@ -905,25 +912,36 @@
     return input;
   }
 
-  async function uploadPostImage(base64Data) {
+  async function uploadPostImages(images) {
     const dialog = getTopDialog();
-    if (!dialog) throw new ShareFlowError('composer_not_found', 'Post composer dialog not found for uploading image');
+    if (!dialog) throw new ShareFlowError('composer_not_found', 'Post composer dialog not found for uploading images');
 
     const fileInput = await getFileInput(dialog);
     if (!fileInput) throw new ShareFlowError('file_input_not_found', 'Facebook file uploader input not found');
 
-    log('กำลังแปลงรูปภาพและเตรียมอัปโหลด...');
-    const file = base64ToFile(base64Data, 'pgsc_upload.png');
+    log('กำลังจัดเรียงและเตรียมอัปโหลดรูปภาพทั้งหมด...');
+    
+    const sortedImages = [...images].sort((a, b) => {
+      return (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' });
+    });
 
     const dataTransfer = new DataTransfer();
-    dataTransfer.items.add(file);
+    
+    for (let i = 0; i < sortedImages.length; i++) {
+      const img = sortedImages[i];
+      const file = base64ToFile(img.data, img.name || `image_${i}.png`);
+      dataTransfer.items.add(file);
+      log(`เตรียมไฟล์: ${img.name || `image_${i}.png`} (${i + 1}/${sortedImages.length})`);
+    }
+
     fileInput.files = dataTransfer.files;
 
     fileInput.dispatchEvent(new Event('change', { bubbles: true }));
     fileInput.dispatchEvent(new Event('input', { bubbles: true }));
 
-    log('รูปภาพแนบแล้ว กำลังรอให้เซิร์ฟเวอร์ Facebook ประมวลผลภาพ (3.5 วินาที)...');
-    await delay(3500);
+    const waitTime = Math.min(2000 + sortedImages.length * 1000, 8000);
+    log(`รูปภาพแนบแล้ว กำลังรอให้เซิร์ฟเวอร์ Facebook ประมวลผลภาพ (${waitTime / 1000} วินาที)...`);
+    await delay(waitTime);
   }
 
   function showOverlayMessage(message, showSkipButton = false, onSkip = null) {

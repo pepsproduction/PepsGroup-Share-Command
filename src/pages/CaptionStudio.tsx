@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import type { CaptionPost, CaptionVariant } from '../types';
+import type { CaptionPost, CaptionVariant, CaptionImage } from '../types';
 import { postStorage } from '../lib/storage';
 import { useNotifications } from '../components/NotificationContexts';
 import { ConfirmModal } from '../components/Modal';
@@ -30,17 +30,73 @@ const DEFAULT_FORM = {
   hashtags: '',
   note: '',
   imageUrl: '',
+  images: [] as CaptionImage[],
 };
 
 export function CaptionStudio() {
   const { addNotification } = useNotifications();
   const [posts, setPosts] = useState<CaptionPost[]>(() => postStorage.getAll());
   const [selectedPost, setSelectedPost] = useState<CaptionPost | null>(posts[0] || null);
-  const [form, setForm] = useState(selectedPost ? { title: selectedPost.title, caption: selectedPost.caption, link: selectedPost.link, hashtags: selectedPost.hashtags, note: selectedPost.note, imageUrl: selectedPost.imageUrl || '' } : { ...DEFAULT_FORM });
+  const [form, setForm] = useState(selectedPost ? { title: selectedPost.title, caption: selectedPost.caption, link: selectedPost.link, hashtags: selectedPost.hashtags, note: selectedPost.note, imageUrl: selectedPost.imageUrl || '', images: selectedPost.images || [] } : { ...DEFAULT_FORM });
   const [activeVariantStyle, setActiveVariantStyle] = useState<string>('professional');
   const [variantCaption, setVariantCaption] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [isNewPost, setIsNewPost] = useState(!selectedPost);
+  const [dragActive, setDragActive] = useState(false);
+
+  const handleFiles = useCallback((fileList: FileList) => {
+    const newImages: CaptionImage[] = [];
+    const filesArray = Array.from(fileList).filter((file) => file.type.startsWith('image/'));
+    
+    if (filesArray.length === 0) return;
+
+    let processedCount = 0;
+    filesArray.forEach((file) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        newImages.push({
+          name: file.name,
+          data: reader.result as string,
+        });
+        processedCount++;
+        if (processedCount === filesArray.length) {
+          const sortedNew = [...newImages].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+          setForm((prev) => ({
+            ...prev,
+            images: [...(prev.images || []), ...sortedNew],
+          }));
+          addNotification('success', 'อัปโหลดสำเร็จ', `เพิ่มรูปภาพ ${filesArray.length} รูปเรียบร้อย`);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  }, [addNotification]);
+
+  const handleDrag = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFiles(e.dataTransfer.files);
+    }
+  }, [handleFiles]);
+
+  const removeImage = useCallback((indexToRemove: number) => {
+    setForm((prev) => ({
+      ...prev,
+      images: (prev.images || []).filter((_, index) => index !== indexToRemove),
+    }));
+  }, []);
 
   const reload = useCallback(() => {
     const all = postStorage.getAll();
@@ -128,13 +184,29 @@ export function CaptionStudio() {
     setPosts(remaining);
     setSelectedPost(remaining[0] || null);
     setIsNewPost(!remaining[0]);
-    if (remaining[0]) setForm({ title: remaining[0].title, caption: remaining[0].caption, link: remaining[0].link, hashtags: remaining[0].hashtags, note: remaining[0].note, imageUrl: remaining[0].imageUrl || '' });
+    if (remaining[0]) setForm({ 
+      title: remaining[0].title, 
+      caption: remaining[0].caption, 
+      link: remaining[0].link, 
+      hashtags: remaining[0].hashtags, 
+      note: remaining[0].note, 
+      imageUrl: remaining[0].imageUrl || '', 
+      images: remaining[0].images || (remaining[0].imageUrl ? [{ name: 'legacy_image.png', data: remaining[0].imageUrl }] : []) 
+    });
     else setForm({ ...DEFAULT_FORM });
   }
 
   function selectPost(p: CaptionPost) {
     setSelectedPost(p);
-    setForm({ title: p.title, caption: p.caption, link: p.link, hashtags: p.hashtags, note: p.note, imageUrl: p.imageUrl || '' });
+    setForm({ 
+      title: p.title, 
+      caption: p.caption, 
+      link: p.link, 
+      hashtags: p.hashtags, 
+      note: p.note, 
+      imageUrl: p.imageUrl || '', 
+      images: p.images || (p.imageUrl ? [{ name: 'legacy_image.png', data: p.imageUrl }] : []) 
+    });
     setIsNewPost(false);
     setVariantCaption('');
   }
@@ -218,80 +290,98 @@ export function CaptionStudio() {
               <textarea id="cap-note" className="form-textarea" rows={2} placeholder="หมายเหตุสำหรับตัวเอง..." value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} />
             </div>
             <div className="form-group">
-              <label className="form-label">🖼️ รูปภาพแนบ (Image Upload)</label>
-              {form.imageUrl ? (
+              <label className="form-label">🖼️ รูปภาพแนบ (Image Upload & Drag-Drop)</label>
+              
+              {/* Responsive Grid Preview */}
+              {form.images && form.images.length > 0 && (
                 <div style={{ 
-                  position: 'relative', 
-                  marginTop: '0.5rem', 
-                  borderRadius: '12px', 
-                  overflow: 'hidden', 
-                  border: '2px dashed var(--accent)', 
-                  maxWidth: '320px',
-                  backgroundColor: 'rgba(255,255,255,0.03)',
-                  padding: '6px',
-                  boxShadow: 'var(--shadow-md)',
-                  transition: 'all 0.3s'
+                  display: 'grid', 
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', 
+                  gap: '12px', 
+                  marginTop: '0.8rem',
+                  marginBottom: '1rem' 
                 }}>
-                  <img src={form.imageUrl} alt="Upload Preview" style={{ width: '100%', borderRadius: '8px', height: 'auto', display: 'block' }} />
-                  <button 
-                    type="button"
-                    className="btn btn-danger btn-sm"
-                    style={{ 
-                      position: 'absolute', 
-                      top: '12px', 
-                      right: '12px', 
-                      padding: '4px 8px', 
-                      fontSize: '11px',
-                      borderRadius: '6px',
-                      boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
-                      backdropFilter: 'blur(4px)'
-                    }}
-                    onClick={() => setForm({ ...form, imageUrl: '' })}
-                  >
-                    🗑️ ลบรูปภาพ
-                  </button>
-                </div>
-              ) : (
-                <div style={{ marginTop: '0.5rem' }}>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) {
-                        const reader = new FileReader();
-                        reader.onloadend = () => {
-                          setForm({ ...form, imageUrl: reader.result as string });
-                        };
-                        reader.readAsDataURL(file);
-                      }
-                    }}
-                    style={{ display: 'none' }}
-                    id="post-image-upload"
-                  />
-                  <label 
-                    htmlFor="post-image-upload" 
-                    className="btn btn-secondary" 
-                    style={{ 
-                      display: 'flex', 
+                  {form.images.map((img, idx) => (
+                    <div key={idx} style={{ 
+                      position: 'relative', 
+                      borderRadius: '8px', 
+                      overflow: 'hidden', 
+                      border: '1px solid var(--border)', 
+                      backgroundColor: 'rgba(255,255,255,0.03)',
+                      padding: '4px',
+                      display: 'flex',
                       flexDirection: 'column',
                       alignItems: 'center',
-                      justifyContent: 'center',
-                      cursor: 'pointer', 
-                      padding: '1.5rem',
-                      border: '2px dashed var(--border)',
-                      borderRadius: '12px',
-                      textAlign: 'center',
-                      backgroundColor: 'rgba(255,255,255,0.01)',
-                      transition: 'all 0.2s'
-                    }}
-                  >
-                    <span style={{ fontSize: '1.8rem', marginBottom: '0.5rem' }}>📸</span>
-                    <span className="font-bold text-sm" style={{ color: 'var(--text)' }}>คลิกเพื่ออัปโหลดรูปภาพ</span>
-                    <span className="text-xs text-muted mt-1">ไฟล์ JPG, PNG, WEBP (แปลงเป็น Base64 อัตโนมัติ)</span>
-                  </label>
+                      boxShadow: 'var(--shadow-sm)'
+                    }}>
+                      <img src={img.data} alt={img.name} style={{ width: '100%', height: '80px', objectFit: 'cover', borderRadius: '6px' }} />
+                      <div className="text-xs text-muted truncate" style={{ width: '100%', textAlign: 'center', marginTop: '4px', fontSize: '10px', padding: '0 2px' }} title={img.name}>
+                        {img.name}
+                      </div>
+                      <button 
+                        type="button"
+                        className="btn btn-danger btn-sm"
+                        style={{ 
+                          position: 'absolute', 
+                          top: '2px', 
+                          right: '2px', 
+                          padding: '2px 4px', 
+                          fontSize: '8px',
+                          borderRadius: '4px',
+                          lineHeight: '1'
+                        }}
+                        onClick={() => removeImage(idx)}
+                      >
+                        ❌
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
+
+              {/* Drag and Drop Zone */}
+              <div style={{ marginTop: '0.5rem' }}>
+                <input
+                  type="file"
+                  multiple
+                  accept="image/*"
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      handleFiles(e.target.files);
+                    }
+                  }}
+                  style={{ display: 'none' }}
+                  id="post-image-upload"
+                />
+                <label 
+                  htmlFor="post-image-upload" 
+                  className="btn btn-secondary" 
+                  onDragEnter={handleDrag}
+                  onDragLeave={handleDrag}
+                  onDragOver={handleDrag}
+                  onDrop={handleDrop}
+                  style={{ 
+                    display: 'flex', 
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer', 
+                    padding: '2rem 1.5rem',
+                    border: dragActive ? '2px dashed var(--accent)' : '2px dashed var(--border)',
+                    borderRadius: '12px',
+                    textAlign: 'center',
+                    backgroundColor: dragActive ? 'rgba(255,107,43,0.06)' : 'rgba(255,255,255,0.01)',
+                    transition: 'all 0.2s',
+                    boxShadow: dragActive ? '0 0 15px rgba(255,107,43,0.15)' : 'none'
+                  }}
+                >
+                  <span style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📥</span>
+                  <span className="font-bold text-sm" style={{ color: 'var(--text)' }}>
+                    {dragActive ? 'วางไฟล์รูปภาพตรงนี้...' : 'ลากไฟล์รูปภาพมาวาง หรือคลิกเพื่ออัปโหลด'}
+                  </span>
+                  <span className="text-xs text-muted mt-1">อัปโหลดได้หลายไฟล์ ไม่จำกัดจำนวน (เรียงตามลำดับชื่อไฟล์เมื่อโพสต์)</span>
+                </label>
+              </div>
             </div>
             <div className="flex gap-1" style={{ justifyContent: 'flex-end' }}>
               <button className="btn btn-secondary" onClick={() => copyText(getPreview(), 'แคปชั่น')}>📋 Copy Caption</button>
