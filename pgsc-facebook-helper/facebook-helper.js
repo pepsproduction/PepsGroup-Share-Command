@@ -6,11 +6,26 @@
   const COMPOSER_TEXTS = [
     'เขียนอะไรสักหน่อย',
     'เขียนอะไรสักอย่าง',
+    'เขียนอะไรบางอย่าง',
+    'เขียนอะไร',
     'เขียนโพสต์',
     'สร้างโพสต์',
+    'เขียนข้อความ',
+    'คุณคิดอะไรอยู่',
+    'คุณกำลังคิดอะไรอยู่',
     'write something',
     "what's on your mind",
     'create post',
+    'public post',
+    'โพสต์สาธารณะ',
+    'สร้างโพสต์สาธารณะ',
+    'โพสต์บางอย่างในกลุ่มนี้',
+    'write something...',
+    'create a public post',
+    'โพสต์ในกลุ่ม',
+    'โพสต์บางอย่าง',
+    'post something',
+    'write a post',
   ];
 
   const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -112,11 +127,7 @@
       style.visibility !== 'hidden' &&
       style.opacity !== '0' &&
       rect.width > 8 &&
-      rect.height > 8 &&
-      rect.bottom > 0 &&
-      rect.right > 0 &&
-      rect.top < window.innerHeight &&
-      rect.left < window.innerWidth
+      rect.height > 8
     );
   }
 
@@ -320,29 +331,27 @@
       const trigger = findComposerTrigger();
       if (trigger) {
         log('Found composer trigger. Clicking to open dialog...');
-        trigger.scrollIntoView({ block: 'center', inline: 'nearest' });
-        trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-        trigger.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-        trigger.click();
+        simulateClick(trigger);
+
+        log('Waiting for composer editor to load inside dialog...');
+        const editor = await waitForEditor();
+        if (editor) {
+          log('Composer editor loaded inside dialog. Inserting caption...');
+          if (await insertCaption(editor, caption)) {
+            if (Array.isArray(images) && images.length > 0) {
+              const dialog = editor.closest('[role="dialog"], [role="alertdialog"], [aria-modal="true"]');
+              log('Uploading images to newly opened composer dialog container:', dialog);
+              await uploadPostImages(dialog, images);
+            }
+            return true;
+          }
+        }
       } else {
         logError('Composer trigger not found on page!');
       }
 
-      log('Waiting for composer editor to load inside dialog...');
-      const editor = await waitForEditor();
-      if (editor) {
-        log('Composer editor loaded inside dialog. Inserting caption...');
-        if (await insertCaption(editor, caption)) {
-          if (Array.isArray(images) && images.length > 0) {
-            const dialog = editor.closest('[role="dialog"], [role="alertdialog"], [aria-modal="true"]');
-            log('Uploading images to newly opened composer dialog container:', dialog);
-            await uploadPostImages(dialog, images);
-          }
-          return true;
-        }
-      }
       logError('Failed to find or paste to composer editor in this attempt.');
-      await sleep(700);
+      await sleep(1000);
     }
 
     logError('Failed to open composer and paste after 4 attempts.');
@@ -511,14 +520,22 @@
 
   function simulateClick(el) {
     const target = getClickableAncestor(el) || el;
-    target.scrollIntoView({ block: 'center', inline: 'center' });
-    target.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
-    target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-    target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
-    target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-    target.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
-    target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    
+    const dispatchEvents = (element) => {
+      element.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+      element.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+      element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      element.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
+      element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      element.click();
+    };
+
+    dispatchEvents(el);
+    if (target !== el) {
+      dispatchEvents(target);
+    }
   }
 
   // ---------------------
