@@ -64,7 +64,7 @@
       chrome.runtime.sendMessage({ type: 'PGSC_FB_READY' }, (response) => {
         if (chrome.runtime.lastError) return;
         if (response?.ok && response?.group) {
-          startShare(response.group, response.caption, response.index, response.total);
+          startShare(response.group, response.caption, response.index, response.total, response.imageUrl, response.postMode);
         }
       });
     }).catch(err => {
@@ -86,7 +86,7 @@
         sendResponse({ ok: false, reason: 'Already running' });
         return;
       }
-      startShare(message.group, message.caption, message.index, message.total)
+      startShare(message.group, message.caption, message.index, message.total, message.imageUrl, message.postMode)
         .then(() => sendResponse({ ok: true }))
         .catch(err => sendResponse({ ok: false, error: err.message }));
       return true;
@@ -99,14 +99,14 @@
   // ---------------------
   // Main Share Orchestrator
   // ---------------------
-  async function startShare(group, caption, index, total) {
+  async function startShare(group, caption, index, total, imageUrl, postMode) {
     RUNNING = true;
-    SESSION = { group, caption, index, total };
+    SESSION = { group, caption, index, total, imageUrl, postMode };
     log(`[${index + 1}/${total}] Sharing to: ${group.name}`);
 
     let result;
     try {
-      await shareToGroup(group, caption);
+      await shareToGroup(group, caption, imageUrl, postMode);
       result = {
         group: group.name,
         groupId: group.id,
@@ -157,7 +157,7 @@
   // ---------------------
   // Core Share Workflow
   // ---------------------
-  async function shareToGroup(group, caption) {
+  async function shareToGroup(group, caption, imageUrl, postMode) {
     await runStep('เปิดลิงก์และกดลูกศรแชร์', () => clickShareButton());
     await runStep('เลือกเมนูแชร์ไปยังกลุ่ม', () => clickGroupsOption());
     await runStep(`ค้นหาและเลือกกลุ่ม: ${group.name}`, () => searchAndSelectGroup(group.name));
@@ -166,8 +166,58 @@
       await runStep('วางแคปชั่นในช่องโพสต์', () => insertCaption(caption.trim()));
     }
 
-    await runStep('กดโพสต์', () => clickPostButton());
-    await runStep('ตรวจผลลัพธ์หลังโพสต์', () => detectSuccess());
+    if (imageUrl && imageUrl.trim()) {
+      await runStep('อัปโหลดรูปภาพแนบ', () => uploadPostImage(imageUrl));
+    }
+
+    if (postMode === 'review') {
+      log('โหมดตรวจสอบก่อนแชร์: แสดงตัวนำทางและรอผู้ใช้กดโพสต์เอง');
+      let skipClicked = false;
+      showOverlayMessage('👁️ PGSC: กรุณาตรวจสอบแล้วกด "โพสต์" (หรือกดปุ่มข้ามเพื่อไปยังกลุ่มถัดไป)', true, () => {
+        skipClicked = true;
+      });
+
+      const startedAt = Date.now();
+      const maxWaitMs = 5 * 60 * 1000; // 5 minutes max wait
+      
+      while (Date.now() - startedAt < maxWaitMs) {
+        if (skipClicked) {
+          hideOverlayMessage();
+          throw new ShareFlowError('skipped', 'ผู้ใช้กดข้ามกลุ่มนี้');
+        }
+
+        const dialog = getTopDialog();
+        if (!dialog) {
+          hideOverlayMessage();
+          await delay(1500);
+          
+          const postErrToast = document.querySelector('[role="alert"], [data-testid="toast"]');
+          if (postErrToast) {
+            const toastText = normalizeText(postErrToast.textContent || '');
+            if (hasAnyText(toastText, ['เกิดข้อผิดพลาด', 'error', 'ไม่สำเร็จ'])) {
+              throw new ShareFlowError('post_error', `Facebook error toast: ${postErrToast.textContent}`);
+            }
+          }
+          log('ตรวจพบการปิดกล่องข้อความ — ย้ายไปยังขั้นตอนถัดไป');
+          return;
+        }
+
+        const rateLimitDialog = detectRateLimitDialog();
+        if (rateLimitDialog) {
+          hideOverlayMessage();
+          await clickCancelOrClose(rateLimitDialog);
+          throw new ShareFlowError('rate_limited', 'rate_limited');
+        }
+
+        await delay(500);
+      }
+
+      hideOverlayMessage();
+      throw new ShareFlowError('timeout', 'หมดเวลารอตรวจทาน (5 นาที)');
+    } else {
+      await runStep('กดโพสต์', () => clickPostButton());
+      await runStep('ตรวจผลลัพธ์หลังโพสต์', () => detectSuccess());
+    }
     log(`Shared to: ${group.name}`);
   }
 
@@ -799,6 +849,135 @@
   function log(msg) {
     console.log(`[PGSC Extension] ${msg}`);
     chrome.runtime.sendMessage({ type: 'PGSC_LOG', text: msg }).catch(() => {});
+  }
+
+  // ---------------------
+  // Image Uploading & Manual Review UI Helpers
+  // ---------------------
+  function base64ToFile(base64Data, filename = 'image.png') {
+    const arr = base64Data.split(',');
+    const mime = arr[0].match(/:(.*?);/)[1];
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n);
+    }
+    return new File([u8arr], filename, { type: mime });
+  }
+
+  function findPhotoVideoButton(container) {
+    const candidates = [...container.querySelectorAll('[aria-label*="รูปภาพ"], [aria-label*="photo" i], [aria-label*="วีดีโอ" i], [aria-label*="video" i], [role="button"], button, div[tabindex="0"]')]
+      .filter(isVisible);
+
+    const scored = candidates
+      .map((el) => {
+        const clickable = getClickableAncestor(el);
+        if (!clickable || !isVisible(clickable) || isDisabled(clickable)) return null;
+
+        const text = normalizedElementText(clickable);
+        const label = normalizeText(clickable.getAttribute('aria-label') || el.getAttribute('aria-label') || '');
+        const combined = `${text} ${label}`.trim();
+
+        let score = 0;
+        if (hasAnyText(combined, ['รูปภาพ/วิดีโอ', 'รูปภาพ', 'วิดีโอ', 'photo/video', 'photo', 'video', 'media', 'สื่อ'])) score += 100;
+        if (clickable.querySelector('svg') || el.querySelector('svg')) score += 10;
+
+        return score > 0 ? { el: clickable, score } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score);
+
+    return scored[0]?.el || null;
+  }
+
+  async function getFileInput(container) {
+    let input = container.querySelector('input[type="file"]');
+    if (input) return input;
+
+    const photoVideoBtn = findPhotoVideoButton(container);
+    if (photoVideoBtn) {
+      log('คลิกปุ่ม รูปภาพ/วิดีโอ เพื่อเปิดใช้งานช่องอัปโหลด');
+      simulateClick(photoVideoBtn);
+      await delay(randomBetween(1000, 2000));
+      input = container.querySelector('input[type="file"]');
+    }
+    return input;
+  }
+
+  async function uploadPostImage(base64Data) {
+    const dialog = getTopDialog();
+    if (!dialog) throw new ShareFlowError('composer_not_found', 'Post composer dialog not found for uploading image');
+
+    const fileInput = await getFileInput(dialog);
+    if (!fileInput) throw new ShareFlowError('file_input_not_found', 'Facebook file uploader input not found');
+
+    log('กำลังแปลงรูปภาพและเตรียมอัปโหลด...');
+    const file = base64ToFile(base64Data, 'pgsc_upload.png');
+
+    const dataTransfer = new DataTransfer();
+    dataTransfer.items.add(file);
+    fileInput.files = dataTransfer.files;
+
+    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    fileInput.dispatchEvent(new Event('input', { bubbles: true }));
+
+    log('รูปภาพแนบแล้ว กำลังรอให้เซิร์ฟเวอร์ Facebook ประมวลผลภาพ (3.5 วินาที)...');
+    await delay(3500);
+  }
+
+  function showOverlayMessage(message, showSkipButton = false, onSkip = null) {
+    hideOverlayMessage();
+    
+    const overlay = document.createElement('div');
+    overlay.id = 'pgsc-review-overlay';
+    overlay.style.position = 'fixed';
+    overlay.style.top = '20px';
+    overlay.style.left = '50%';
+    overlay.style.transform = 'translateX(-50%)';
+    overlay.style.zIndex = '999999';
+    overlay.style.backgroundColor = 'rgba(28, 28, 30, 0.95)';
+    overlay.style.border = '2px solid #FF6B2B';
+    overlay.style.borderRadius = '12px';
+    overlay.style.padding = '14px 24px';
+    overlay.style.color = '#fff';
+    overlay.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+    overlay.style.fontSize = '15px';
+    overlay.style.fontWeight = 'bold';
+    overlay.style.boxShadow = '0 8px 32px rgba(0, 0, 0, 0.5)';
+    overlay.style.display = 'flex';
+    overlay.style.alignItems = 'center';
+    overlay.style.gap = '15px';
+    overlay.style.backdropFilter = 'blur(8px)';
+    overlay.style.transition = 'all 0.3s ease';
+
+    const textNode = document.createElement('span');
+    textNode.textContent = message;
+    overlay.appendChild(textNode);
+
+    if (showSkipButton && onSkip) {
+      const btn = document.createElement('button');
+      btn.textContent = '⏭️ ข้ามกลุ่มนี้';
+      btn.style.backgroundColor = '#ef5350';
+      btn.style.color = '#fff';
+      btn.style.border = 'none';
+      btn.style.borderRadius = '6px';
+      btn.style.padding = '6px 12px';
+      btn.style.cursor = 'pointer';
+      btn.style.fontSize = '13px';
+      btn.style.fontWeight = 'bold';
+      btn.addEventListener('click', onSkip);
+      overlay.appendChild(btn);
+    }
+
+    document.body.appendChild(overlay);
+  }
+
+  function hideOverlayMessage() {
+    const existing = document.getElementById('pgsc-review-overlay');
+    if (existing) {
+      existing.remove();
+    }
   }
 
   // ---------------------

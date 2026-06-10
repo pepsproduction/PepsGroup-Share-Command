@@ -39,6 +39,7 @@ export interface CaptionPost {
   hashtags: string;
   note: string;
   variants: CaptionVariant[];
+  imageUrl?: string;
   createdAt: string;
   updatedAt: string;
 }

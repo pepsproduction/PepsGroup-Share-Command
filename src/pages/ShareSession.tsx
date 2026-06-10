@@ -72,6 +72,8 @@ export function ShareSession() {
   const [autoRunning, setAutoRunning] = useState(false);
   const [autoResults, setAutoResults] = useState<ExtensionShareResult[]>([]);
   const [autoProgress, setAutoProgress] = useState<{ current: number; total: number; group: string } | null>(null);
+  const [includeImage, setIncludeImage] = useState(true);
+  const [postMode, setPostMode] = useState<'auto' | 'review'>('auto');
 
   // Detect extension on mount
   useEffect(() => {
@@ -167,7 +169,16 @@ export function ShareSession() {
       ? [firstPost.title, firstPost.caption, firstPost.link, firstPost.hashtags].filter(Boolean).join('\n\n').trim()
       : '';
 
-    const result = await startExtensionSession({ sessionId, postUrl: autoPostUrl.trim(), groups: extGroups, caption });
+    const imageUrl = (includeImage && firstPost?.imageUrl) ? firstPost.imageUrl : undefined;
+
+    const result = await startExtensionSession({ 
+      sessionId, 
+      postUrl: autoPostUrl.trim(), 
+      groups: extGroups, 
+      caption,
+      imageUrl,
+      postMode
+    });
     if (!result.ok) {
       setAutoRunning(false);
       setAutoProgress(null);
@@ -175,7 +186,7 @@ export function ShareSession() {
     } else {
       addNotification('info', 'Auto Share เริ่มแล้ว', `กำลังแชร์ไปยัง ${extGroups.length} กลุ่ม`);
     }
-  }, [selectedCampaign, autoPostUrl, addNotification]);
+  }, [selectedCampaign, autoPostUrl, addNotification, includeImage, postMode]);
 
   const handleCancelAutoShare = useCallback(async () => {
     await cancelExtensionSession();
@@ -381,6 +392,65 @@ export function ShareSession() {
                 disabled={autoRunning}
               />
             </div>
+            {(() => {
+              const pendingItemsForImage = selectedCampaign ? queueStorage.getByCampaign(selectedCampaign).filter(q => q.status === 'not_started') : [];
+              const firstItemForImage = pendingItemsForImage[0];
+              const campaignPost = firstItemForImage ? posts.find(p => p.id === firstItemForImage.postId) : null;
+              const hasImage = !!campaignPost?.imageUrl;
+              return (
+                <>
+                  {hasImage && (
+                    <div className="form-group flex items-center" style={{ marginBottom: '1rem', gap: '8px' }}>
+                      <input
+                        type="checkbox"
+                        id="include-image-checkbox"
+                        checked={includeImage}
+                        onChange={(e) => setIncludeImage(e.target.checked)}
+                        disabled={autoRunning}
+                        style={{ width: 'auto', cursor: 'pointer' }}
+                      />
+                      <label htmlFor="include-image-checkbox" style={{ cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: 'var(--text)' }}>
+                        🖼️ แนบรูปภาพที่บันทึกไว้ไปด้วย (Include Image)
+                      </label>
+                    </div>
+                  )}
+                  <div className="form-group" style={{ marginBottom: '1.2rem' }}>
+                    <label className="form-label">โหมดการแชร์ (Post Click Mode)</label>
+                    <div style={{ display: 'flex', gap: '1rem', marginTop: '0.4rem' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '13px' }}>
+                        <input
+                          type="radio"
+                          name="postMode"
+                          value="auto"
+                          checked={postMode === 'auto'}
+                          onChange={() => setPostMode('auto')}
+                          disabled={autoRunning}
+                          style={{ marginRight: '6px' }}
+                        />
+                        🤖 กดโพสต์อัตโนมัติ (Auto-Click Post)
+                      </label>
+                      <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '13px' }}>
+                        <input
+                          type="radio"
+                          name="postMode"
+                          value="review"
+                          checked={postMode === 'review'}
+                          onChange={() => setPostMode('review')}
+                          disabled={autoRunning}
+                          style={{ marginRight: '6px' }}
+                        />
+                        👁️ ตรวจสอบก่อน (Manual Review)
+                      </label>
+                    </div>
+                    <p className="text-xs text-muted mt-1" style={{ lineHeight: 1.4 }}>
+                      {postMode === 'auto' 
+                        ? 'ระบบจะพิมพ์แคปชั่น (และอัปโหลดรูป) แล้วกดปุ่มโพสต์ให้โดยอัตโนมัติ' 
+                        : 'ระบบจะพิมพ์แคปชั่น (และอัปโหลดรูป) ให้เรียบร้อย แล้วปล่อยให้คุณกดปุ่มโพสต์เองเพื่อตรวจสอบความถูกต้อง'}
+                    </p>
+                  </div>
+                </>
+              );
+            })()}
             {(autoRunning || autoResults.length > 0) && (
               <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: '10px', padding: '1rem', marginBottom: '1rem' }}>
                 {autoProgress && (

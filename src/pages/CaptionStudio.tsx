@@ -29,13 +29,14 @@ const DEFAULT_FORM = {
   link: '',
   hashtags: '',
   note: '',
+  imageUrl: '',
 };
 
 export function CaptionStudio() {
   const { addNotification } = useNotifications();
   const [posts, setPosts] = useState<CaptionPost[]>(() => postStorage.getAll());
   const [selectedPost, setSelectedPost] = useState<CaptionPost | null>(posts[0] || null);
-  const [form, setForm] = useState(selectedPost ? { title: selectedPost.title, caption: selectedPost.caption, link: selectedPost.link, hashtags: selectedPost.hashtags, note: selectedPost.note } : { ...DEFAULT_FORM });
+  const [form, setForm] = useState(selectedPost ? { title: selectedPost.title, caption: selectedPost.caption, link: selectedPost.link, hashtags: selectedPost.hashtags, note: selectedPost.note, imageUrl: selectedPost.imageUrl || '' } : { ...DEFAULT_FORM });
   const [activeVariantStyle, setActiveVariantStyle] = useState<string>('professional');
   const [variantCaption, setVariantCaption] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -127,13 +128,13 @@ export function CaptionStudio() {
     setPosts(remaining);
     setSelectedPost(remaining[0] || null);
     setIsNewPost(!remaining[0]);
-    if (remaining[0]) setForm({ title: remaining[0].title, caption: remaining[0].caption, link: remaining[0].link, hashtags: remaining[0].hashtags, note: remaining[0].note });
+    if (remaining[0]) setForm({ title: remaining[0].title, caption: remaining[0].caption, link: remaining[0].link, hashtags: remaining[0].hashtags, note: remaining[0].note, imageUrl: remaining[0].imageUrl || '' });
     else setForm({ ...DEFAULT_FORM });
   }
 
   function selectPost(p: CaptionPost) {
     setSelectedPost(p);
-    setForm({ title: p.title, caption: p.caption, link: p.link, hashtags: p.hashtags, note: p.note });
+    setForm({ title: p.title, caption: p.caption, link: p.link, hashtags: p.hashtags, note: p.note, imageUrl: p.imageUrl || '' });
     setIsNewPost(false);
     setVariantCaption('');
   }
@@ -215,6 +216,82 @@ export function CaptionStudio() {
             <div className="form-group">
               <label className="form-label" htmlFor="cap-note">หมายเหตุ</label>
               <textarea id="cap-note" className="form-textarea" rows={2} placeholder="หมายเหตุสำหรับตัวเอง..." value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">🖼️ รูปภาพแนบ (Image Upload)</label>
+              {form.imageUrl ? (
+                <div style={{ 
+                  position: 'relative', 
+                  marginTop: '0.5rem', 
+                  borderRadius: '12px', 
+                  overflow: 'hidden', 
+                  border: '2px dashed var(--accent)', 
+                  maxWidth: '320px',
+                  backgroundColor: 'rgba(255,255,255,0.03)',
+                  padding: '6px',
+                  boxShadow: 'var(--shadow-md)',
+                  transition: 'all 0.3s'
+                }}>
+                  <img src={form.imageUrl} alt="Upload Preview" style={{ width: '100%', borderRadius: '8px', height: 'auto', display: 'block' }} />
+                  <button 
+                    type="button"
+                    className="btn btn-danger btn-sm"
+                    style={{ 
+                      position: 'absolute', 
+                      top: '12px', 
+                      right: '12px', 
+                      padding: '4px 8px', 
+                      fontSize: '11px',
+                      borderRadius: '6px',
+                      boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+                      backdropFilter: 'blur(4px)'
+                    }}
+                    onClick={() => setForm({ ...form, imageUrl: '' })}
+                  >
+                    🗑️ ลบรูปภาพ
+                  </button>
+                </div>
+              ) : (
+                <div style={{ marginTop: '0.5rem' }}>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        const reader = new FileReader();
+                        reader.onloadend = () => {
+                          setForm({ ...form, imageUrl: reader.result as string });
+                        };
+                        reader.readAsDataURL(file);
+                      }
+                    }}
+                    style={{ display: 'none' }}
+                    id="post-image-upload"
+                  />
+                  <label 
+                    htmlFor="post-image-upload" 
+                    className="btn btn-secondary" 
+                    style={{ 
+                      display: 'flex', 
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer', 
+                      padding: '1.5rem',
+                      border: '2px dashed var(--border)',
+                      borderRadius: '12px',
+                      textAlign: 'center',
+                      backgroundColor: 'rgba(255,255,255,0.01)',
+                      transition: 'all 0.2s'
+                    }}
+                  >
+                    <span style={{ fontSize: '1.8rem', marginBottom: '0.5rem' }}>📸</span>
+                    <span className="font-bold text-sm" style={{ color: 'var(--text)' }}>คลิกเพื่ออัปโหลดรูปภาพ</span>
+                    <span className="text-xs text-muted mt-1">ไฟล์ JPG, PNG, WEBP (แปลงเป็น Base64 อัตโนมัติ)</span>
+                  </label>
+                </div>
+              )}
             </div>
             <div className="flex gap-1" style={{ justifyContent: 'flex-end' }}>
               <button className="btn btn-secondary" onClick={() => copyText(getPreview(), 'แคปชั่น')}>📋 Copy Caption</button>
