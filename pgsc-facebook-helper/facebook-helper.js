@@ -43,6 +43,31 @@
     }
   }
 
+  async function isRequestProcessed(requestId) {
+    try {
+      const data = await chrome.storage.local.get(PROCESSED_KEY);
+      const list = data[PROCESSED_KEY] || [];
+      return list.includes(requestId);
+    } catch {
+      return false;
+    }
+  }
+
+  async function markRequestProcessed(requestId) {
+    try {
+      const data = await chrome.storage.local.get(PROCESSED_KEY);
+      const list = data[PROCESSED_KEY] || [];
+      if (!list.includes(requestId)) {
+        list.push(requestId);
+        const updated = list.slice(-50);
+        await chrome.storage.local.set({ [PROCESSED_KEY]: updated });
+        log('Marked command as processed in local storage:', requestId);
+      }
+    } catch (err) {
+      logError('Failed to save processed request:', err);
+    }
+  }
+
   function isValidCommand(data) {
     return Boolean(
       data &&
@@ -177,7 +202,12 @@
   }
 
   function insertCaption(editor, caption) {
-    if ((editor.innerText || editor.textContent || '').includes(caption)) return true;
+    const currentText = normalizeText(editor.innerText || editor.textContent || '');
+    const targetText = normalizeText(caption);
+    if (currentText.includes(targetText)) {
+      log('Caption is already in editor. Skipping text insertion.');
+      return true;
+    }
 
     focusEditable(editor);
 
@@ -207,7 +237,8 @@
       })
     );
 
-    return inserted || (editor.innerText || editor.textContent || '').includes(caption);
+    const checkText = normalizeText(editor.innerText || editor.textContent || '');
+    return inserted || checkText.includes(targetText);
   }
 
   async function waitForEditor() {
@@ -236,8 +267,9 @@
         log('Found existing composer editor inside dialog. Inserting caption...');
         if (insertCaption(existingEditor, caption)) {
           if (Array.isArray(images) && images.length > 0) {
-            log('Uploading images to existing composer...');
-            await uploadPostImages(images);
+            const dialog = existingEditor.closest('[role="dialog"], [role="alertdialog"], [aria-modal="true"]');
+            log('Uploading images to existing composer dialog container:', dialog);
+            await uploadPostImages(dialog, images);
           }
           return true;
         }
@@ -261,8 +293,9 @@
         log('Composer editor loaded inside dialog. Inserting caption...');
         if (insertCaption(editor, caption)) {
           if (Array.isArray(images) && images.length > 0) {
-            log('Uploading images to newly opened composer dialog...');
-            await uploadPostImages(images);
+            const dialog = editor.closest('[role="dialog"], [role="alertdialog"], [aria-modal="true"]');
+            log('Uploading images to newly opened composer dialog container:', dialog);
+            await uploadPostImages(dialog, images);
           }
           return true;
         }
@@ -293,6 +326,14 @@
     if (!isValidCommand(command)) return;
     if (processedRequests.has(command.requestId) || activeRequestId === command.requestId) return;
     
+    // Check persistent storage to avoid duplicate processing across tabs/reloads
+    const alreadyProcessed = await isRequestProcessed(command.requestId);
+    if (alreadyProcessed) {
+      log(`Command ${command.requestId} was already successfully processed. Skipping duplicate call.`);
+      processedRequests.add(command.requestId); // Add to memory cache
+      return;
+    }
+
     if (!isFreshCommand(command)) {
       log(`Ignoring command ${command.requestId} because it is too old`);
       return;
@@ -308,8 +349,9 @@
     try {
       const pasted = await openComposerAndPaste(command.caption, command.images);
       if (pasted) {
-        log(`Command ${command.requestId} handled successfully. Cleaning up storage...`);
+        log(`Command ${command.requestId} handled successfully. Saving processed state and clearing...`);
         rememberProcessedRequest(command.requestId);
+        await markRequestProcessed(command.requestId);
         await clearStoredCommand(command.requestId);
       } else {
         logError(`Command ${command.requestId} failed to paste.`);
@@ -460,7 +502,7 @@
         const combined = `${text} ${label}`.trim();
 
         let score = 0;
-        if (hasAnyText(combined, ['รูปภาพ/วิดีโอ', 'รูปภาพ', 'วิดีโอ', 'photo/video', 'photo', 'video', 'media', 'สื่อ'])) score += 100;
+        if (hasAnyText(combined, ['รูปภาพ/วิดีโอ', 'รูปภาพ', 'วิดีโอ', 'photo/video', 'photo', 'video', 'media', 'สื่อ', 'ภาพ', 'image'])) score += 100;
         if (clickable.querySelector('svg') || el.querySelector('svg')) score += 10;
 
         return score > 0 ? { el: clickable, score } : null;
@@ -500,10 +542,9 @@
     return null;
   }
 
-  async function uploadPostImages(images) {
+  async function uploadPostImages(dialog, images) {
     log(`Starting image upload process for ${images.length} images...`);
     try {
-      const dialog = getTopDialog();
       if (!dialog) {
         logError('Post composer dialog not found for uploading images');
         return;
