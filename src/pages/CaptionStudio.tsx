@@ -33,11 +33,54 @@ const DEFAULT_FORM = {
   images: [] as CaptionImage[],
 };
 
+function compressImage(file: File, maxWidth = 1000, maxHeight = 1000, quality = 0.7): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > maxWidth) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          }
+        } else {
+          if (height > maxHeight) {
+            width = Math.round((width * maxHeight) / height);
+            height = maxHeight;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(event.target?.result as string);
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve(dataUrl);
+      };
+      img.onerror = (err) => reject(err);
+    };
+    reader.onerror = (err) => reject(err);
+  });
+}
+
 export function CaptionStudio() {
   const { addNotification } = useNotifications();
   const [posts, setPosts] = useState<CaptionPost[]>(() => postStorage.getAll());
   const [selectedPost, setSelectedPost] = useState<CaptionPost | null>(posts[0] || null);
-  const [form, setForm] = useState(selectedPost ? { title: selectedPost.title, caption: selectedPost.caption, link: selectedPost.link, hashtags: selectedPost.hashtags, note: selectedPost.note, imageUrl: selectedPost.imageUrl || '', images: selectedPost.images || [] } : { ...DEFAULT_FORM });
+  const [form, setForm] = useState(selectedPost ? { title: selectedPost.title, caption: selectedPost.caption, link: selectedPost.link, hashtags: selectedPost.hashtags, note: selectedPost.note, imageUrl: selectedPost.imageUrl || '', images: selectedPost.images || (selectedPost.imageUrl ? [{ name: 'legacy_image.png', data: selectedPost.imageUrl }] : []) } : { ...DEFAULT_FORM });
   const [activeVariantStyle, setActiveVariantStyle] = useState<string>('professional');
   const [variantCaption, setVariantCaption] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -45,30 +88,40 @@ export function CaptionStudio() {
   const [dragActive, setDragActive] = useState(false);
 
   const handleFiles = useCallback((fileList: FileList) => {
-    const newImages: CaptionImage[] = [];
     const filesArray = Array.from(fileList).filter((file) => file.type.startsWith('image/'));
-    
     if (filesArray.length === 0) return;
 
-    let processedCount = 0;
-    filesArray.forEach((file) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        newImages.push({
+    addNotification('info', 'กำลังประมวลผลรูปภาพ', `กำลังย่อขนาดและบีบอัดรูปภาพ ${filesArray.length} รูป...`);
+
+    const promises = filesArray.map((file) => {
+      return compressImage(file)
+        .then((compressedData) => ({
           name: file.name,
-          data: reader.result as string,
+          data: compressedData,
+        }))
+        .catch(() => {
+          return new Promise<CaptionImage>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              resolve({
+                name: file.name,
+                data: reader.result as string,
+              });
+            };
+            reader.readAsDataURL(file);
+          });
         });
-        processedCount++;
-        if (processedCount === filesArray.length) {
-          const sortedNew = [...newImages].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
-          setForm((prev) => ({
-            ...prev,
-            images: [...(prev.images || []), ...sortedNew],
-          }));
-          addNotification('success', 'อัปโหลดสำเร็จ', `เพิ่มรูปภาพ ${filesArray.length} รูปเรียบร้อย`);
-        }
-      };
-      reader.readAsDataURL(file);
+    });
+
+    Promise.all(promises).then((newImages) => {
+      const sortedNew = [...newImages].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+      setForm((prev) => ({
+        ...prev,
+        images: [...(prev.images || []), ...sortedNew],
+      }));
+      addNotification('success', 'อัปโหลดสำเร็จ', `เพิ่มรูปภาพ ${newImages.length} รูปเรียบร้อย`);
+    }).catch((err) => {
+      addNotification('error', 'อัปโหลดรูปภาพล้มเหลว', err.message);
     });
   }, [addNotification]);
 
@@ -127,34 +180,43 @@ export function CaptionStudio() {
       return;
     }
     const now = isoNow();
-    if (isNewPost || !selectedPost) {
-      const post: CaptionPost = {
-        id: `post_${Date.now()}`,
-        ...form,
-        variants: variantCaption ? [{
-          id: `var_${Date.now()}`,
-          style: activeVariantStyle as CaptionVariant['style'],
-          label: STYLES.find((s) => s.key === activeVariantStyle)?.label || activeVariantStyle,
-          caption: variantCaption,
-        }] : [],
-        createdAt: now,
-        updatedAt: now,
-      };
-      postStorage.add(post);
-      addNotification('success', 'สร้างโพสต์สำเร็จ', `"${post.title}" บันทึกแล้ว`);
-      setSelectedPost(post);
-      setIsNewPost(false);
-    } else {
-      const updated: CaptionPost = {
-        ...selectedPost,
-        ...form,
-        updatedAt: now,
-      };
-      postStorage.update(updated);
-      addNotification('success', 'อัปเดตโพสต์สำเร็จ', `"${updated.title}" อัปเดตแล้ว`);
-      setSelectedPost(updated);
+    try {
+      if (isNewPost || !selectedPost) {
+        const post: CaptionPost = {
+          id: `post_${Date.now()}`,
+          ...form,
+          variants: variantCaption ? [{
+            id: `var_${Date.now()}`,
+            style: activeVariantStyle as CaptionVariant['style'],
+            label: STYLES.find((s) => s.key === activeVariantStyle)?.label || activeVariantStyle,
+            caption: variantCaption,
+          }] : [],
+          createdAt: now,
+          updatedAt: now,
+        };
+        postStorage.add(post);
+        addNotification('success', 'สร้างโพสต์สำเร็จ', `"${post.title}" บันทึกแล้ว`);
+        setSelectedPost(post);
+        setIsNewPost(false);
+      } else {
+        const updated: CaptionPost = {
+          ...selectedPost,
+          ...form,
+          updatedAt: now,
+        };
+        postStorage.update(updated);
+        addNotification('success', 'อัปเดตโพสต์สำเร็จ', `"${updated.title}" อัปเดตแล้ว`);
+        setSelectedPost(updated);
+      }
+      reload();
+    } catch (err) {
+      console.error(err);
+      if (err instanceof Error && err.name === 'QuotaExceededError') {
+        addNotification('error', 'บันทึกไม่สำเร็จ: พื้นที่เต็ม', 'รูปภาพของคุณมีขนาดใหญ่เกินกว่าจะเก็บในเบราว์เซอร์ กรุณาลดขนาดภาพหรือลบรูปออกบางส่วน');
+      } else {
+        addNotification('error', 'บันทึกโพสต์ไม่สำเร็จ', (err as Error).message);
+      }
     }
-    reload();
   }
 
   function handleAddVariant() {
