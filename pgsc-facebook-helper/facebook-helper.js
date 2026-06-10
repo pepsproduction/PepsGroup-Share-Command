@@ -312,8 +312,13 @@
 
   async function openComposerAndPaste(caption, images) {
     log(`Starting paste operation. Images count: ${images?.length || 0}`);
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      log(`Attempt ${attempt + 1}/4 to find composer and paste`);
+    
+    // Delay initially for 2.5s to let Facebook's heavy JS load and hydrate React event handlers
+    log('Waiting 2500ms for Facebook group page to stabilize event handlers...');
+    await sleep(2500);
+
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      log(`Attempt ${attempt + 1}/6 to find composer and paste`);
       const existingEditor = findPostEditor();
       if (existingEditor) {
         log('Found existing composer editor inside dialog. Inserting caption...');
@@ -351,10 +356,10 @@
       }
 
       logError('Failed to find or paste to composer editor in this attempt.');
-      await sleep(1000);
+      await sleep(1500);
     }
 
-    logError('Failed to open composer and paste after 4 attempts.');
+    logError('Failed to open composer and paste after 6 attempts.');
     return false;
   }
 
