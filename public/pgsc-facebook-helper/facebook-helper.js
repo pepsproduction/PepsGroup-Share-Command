@@ -201,7 +201,7 @@
     selection.addRange(range);
   }
 
-  function insertCaption(editor, caption) {
+  async function insertCaption(editor, caption) {
     const currentText = normalizeText(editor.innerText || editor.textContent || '');
     const targetText = normalizeText(caption);
     if (currentText.includes(targetText)) {
@@ -211,20 +211,61 @@
 
     focusEditable(editor);
 
-    let inserted = false;
+    // Method 1: Simulate native paste event (preserves formatting & newlines)
+    log('Attempting to insert caption using ClipboardEvent paste...');
+    let pasted = false;
     try {
-      inserted = document.execCommand('insertText', false, caption);
-    } catch {
-      inserted = false;
+      const dt = new DataTransfer();
+      dt.setData('text/plain', caption);
+      const evt = new ClipboardEvent('paste', {
+        clipboardData: dt,
+        bubbles: true,
+        cancelable: true,
+      });
+      editor.dispatchEvent(evt);
+      await sleep(350);
+      
+      const checkText = normalizeText(editor.innerText || editor.textContent || '');
+      pasted = checkText.includes(targetText);
+      if (pasted) {
+        log('Caption successfully inserted via ClipboardEvent.');
+      }
+    } catch (err) {
+      logError('ClipboardEvent paste failed:', err);
     }
 
-    if (!inserted) {
+    // Method 2: Fallback to document.execCommand
+    if (!pasted) {
+      log('ClipboardEvent failed. Falling back to execCommand...');
+      try {
+        pasted = document.execCommand('insertText', false, caption);
+      } catch (err) {
+        logError('execCommand failed:', err);
+      }
+
+      if (!pasted) {
+        const checkText = normalizeText(editor.innerText || editor.textContent || '');
+        if (checkText.includes(targetText)) {
+          log('Text successfully inserted by execCommand (verified by content check).');
+          pasted = true;
+        }
+      }
+    }
+
+    // Method 3: Fallback to text node insertion
+    if (!pasted) {
+      log('execCommand failed. Falling back to Range TextNode insertion...');
       const selection = window.getSelection();
       if (selection && selection.rangeCount > 0) {
-        selection.getRangeAt(0).deleteContents();
-        selection.getRangeAt(0).insertNode(document.createTextNode(caption));
-        selection.collapseToEnd();
-        inserted = true;
+        try {
+          selection.getRangeAt(0).deleteContents();
+          selection.getRangeAt(0).insertNode(document.createTextNode(caption));
+          selection.collapseToEnd();
+          pasted = true;
+          log('Caption inserted via Range TextNode.');
+        } catch (err) {
+          logError('Range TextNode insertion failed:', err);
+        }
       }
     }
 
@@ -237,8 +278,8 @@
       })
     );
 
-    const checkText = normalizeText(editor.innerText || editor.textContent || '');
-    return inserted || checkText.includes(targetText);
+    const finalCheckText = normalizeText(editor.innerText || editor.textContent || '');
+    return pasted || finalCheckText.includes(targetText);
   }
 
   async function waitForEditor() {
@@ -265,7 +306,7 @@
       const existingEditor = findPostEditor();
       if (existingEditor) {
         log('Found existing composer editor inside dialog. Inserting caption...');
-        if (insertCaption(existingEditor, caption)) {
+        if (await insertCaption(existingEditor, caption)) {
           if (Array.isArray(images) && images.length > 0) {
             const dialog = existingEditor.closest('[role="dialog"], [role="alertdialog"], [aria-modal="true"]');
             log('Uploading images to existing composer dialog container:', dialog);
@@ -291,7 +332,7 @@
       const editor = await waitForEditor();
       if (editor) {
         log('Composer editor loaded inside dialog. Inserting caption...');
-        if (insertCaption(editor, caption)) {
+        if (await insertCaption(editor, caption)) {
           if (Array.isArray(images) && images.length > 0) {
             const dialog = editor.closest('[role="dialog"], [role="alertdialog"], [aria-modal="true"]');
             log('Uploading images to newly opened composer dialog container:', dialog);
